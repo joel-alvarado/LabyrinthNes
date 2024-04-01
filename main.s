@@ -28,6 +28,10 @@ direction: .res 1 ; 0 = up, 1 = down, 2 = left, 3 = right
 animState: .res 1 ; 0 = first frame, 1 = second frame, 2 = third frame
 frameCounter: .res 1 ; Counter for frames
 vblank_flag: .res 1 ; Flag for vblank
+isWalking: .res 1 ; Flag for walking to animate
+
+; Controller vars
+pad: .res 1 ; Controller 1 input
 
 .segment "BSS"
 x_coord: .res 1
@@ -112,28 +116,13 @@ main:
             bne @loop
 
     render_initial_sprites:
-        ldx #100
-        stx x_coord
-        ldy #90
-        sty y_coord
-
-        ldx #0
-        render_initial_sprites_loop:
-            lda x_coord
-            sta render_x
-            lda y_coord
-            sta render_y
-            lda ants, x
-            sta render_tile
-            jsr render_sprite
-            inx
-            lda x_coord
-            clc
-            adc #16
-            sta x_coord
-
-            cpx #4
-            bne render_initial_sprites_loop
+        lda #100
+        sta render_x
+        lda #100
+        sta render_y
+        lda #$01
+        sta render_tile
+        jsr render_sprite
 
     enable_rendering:
         lda #%10000000	; Enable NMI
@@ -142,6 +131,8 @@ main:
         sta PPUMASK
 
 forever:
+    jsr handle_input
+    jsr update_player
     jsr update_sprites
     jmp forever
 
@@ -265,13 +256,18 @@ update_sprites:
     cmp #1
     bne skip_update_sprites
 
-    ; Update sprites
+    ; If isWalking is not set, reset sprites
+    lda isWalking
+    cmp #0
+    beq reset_animState
 
-    ; If animState is 2, reset animState to 0 and reset sprites to first frame
+    ; Update sprites
+    ; If animState is 2, reset animState to 0 and reset sprite to first frame
     lda animState
     cmp #2
     bne skip_reset_animState
 
+    reset_animState:
     ; Reset animState to 0
     lda #$00
     sta animState
@@ -289,7 +285,7 @@ update_sprites:
     adc #4 ; Add 4 to x to move to the next tile data
     tax ; Store the updated x back to x
     iny ; Increase y by 1
-    cpy #16
+    cpy #4
     bne reset_sprites_loop ; If y is not 16, loop back to reset_sprites_loop, since we have reset updated all sprites
 
     ; Skip updating sprites since we just reset them
@@ -318,11 +314,92 @@ update_sprites:
     cpy #16
     bne update_sprites_loop ; If y is not 16, loop back to update_sprites_loop, since we have not updated all sprites
 
+    skip_update_sprites:
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
-
-    skip_update_sprites:
     rts
+
+handle_input:
+    ; write a 1, then a 0, to CONTROLLER1
+    ; to latch button states
+    lda #$01
+    sta CONTROLLER1
+    lda #$00 
+    sta CONTROLLER1
+
+    lda #%00000001
+    sta pad
+
+    get_buttons:
+    lda CONTROLLER1 ; Read next button's state ; A = %00000001
+    lsr A     ; 00000001 -> 00000000 C=1
+    rol pad  ; 00000000 -> 00000001 C=0
+                    ; onto right side of pad1
+                    ; and leftmost 0 of pad1 into carry flag
+    bcc get_buttons ; Continue until original "1" is in carry flag
+    rts
+
+update_player:
+    ; Dont check if frameCounter is not 29
+    lda frameCounter
+    cmp #29
+    bne skip_update_player
+
+    ; Dont update player if vblank_flag is not set
+    lda vblank_flag
+    cmp #1
+    bne skip_update_player
+
+    ; Update player
+    lda pad
+    and BTN_UP
+    bne player_move_up
+
+    lda pad
+    and BTN_DOWN
+    bne player_move_down
+
+    lda pad
+    and BTN_LEFT
+    bne player_move_left
+
+    lda pad
+    and BTN_RIGHT
+    bne player_move_right
+
+    ; If no buttons are pressed, disable isWalking
+    lda #0
+    sta isWalking
+    jmp skip_update_player
+    
+    player_move_up:
+    lda #0
+    sta direction
+    jmp enable_is_walking
+
+    player_move_down:
+    lda #1
+    sta direction
+    jmp enable_is_walking
+
+    player_move_left:
+    lda #2
+    sta direction
+    jmp enable_is_walking
+
+    player_move_right:
+    lda #3
+    sta direction
+    jmp enable_is_walking
+
+    enable_is_walking:
+    lda #1
+    sta isWalking
+
+    skip_update_player:
+    rts
+
+
 
 palettes:
 ; background palette
