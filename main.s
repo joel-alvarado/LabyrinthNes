@@ -1,26 +1,36 @@
-; Joel André Alvarado Morales 802-20-8724
-
 .segment "HEADER"
-  ; .byte "NES", $1A      ; iNES header identifier
-  .byte $4E, $45, $53, $1A
-  .byte 2               ; 2x 16KB PRG code
-  .byte 1               ; 1x  8KB CHR data
-  .byte $01, $00        ; mapper 0, vertical mirroring
+; .byte "NES", $1A      ; iNES header identifier
+.byte $4E, $45, $53, $1A
+.byte 2               ; 2x 16KB PRG code
+.byte 1               ; 1x  8KB CHR data
+.byte $01, $00        ; mapper 0, vertical mirroring
 
 .segment "VECTORS"
-  ;; When an NMI happens (once per frame if enabled) the label nmi:
-  .addr nmi
-  ;; When the processor first turns on or is reset, it will jump to the label reset:
-  .addr reset
-  ;; External interrupt IRQ (unused)
-  .addr 0
+;; When an NMI happens (once per frame if enabled) the label nmi:
+.addr nmi
+;; When the processor first turns on or is reset, it will jump to the label reset:
+.addr reset
+;; External interrupt IRQ (unused)
+.addr 0
 
 ; "nes" linker config requires a STARTUP section, even if it's empty
 .segment "STARTUP"
 
 .segment "ZEROPAGE"
-direction: .res 1
-animState: .res 1
+; Args for render_sprite subroutine
+render_x: .res 1
+render_y: .res 1
+render_tile: .res 1
+available_oam: .res 1
+
+; Animation vars
+direction: .res 1 ; 0 = up, 1 = down, 2 = left, 3 = right
+animState: .res 1 ; 0 = small arrow, 1 = big arrow
+frameCounter: .res 1 ; Counter for frames
+
+.segment "BSS"
+x_coord: .res 1
+y_coord: .res 1
 
 
 ; Main code segment for the program
@@ -29,97 +39,230 @@ animState: .res 1
 .include "constants.inc"
 
 reset:
-  sei		; disable IRQs
-  cld		; disable decimal mode
-  ldx #$40
-  stx $4017	; disable APU frame IRQ
-  ldx #$ff 	; Set up stack
-  txs		;  .
-  inx		; now X = 0
-  stx PPUCTRL	; disable NMI
-  stx PPUMASK 	; disable rendering
-  stx $4010 	; disable DMC IRQs
+sei		; disable IRQs
+cld		; disable decimal mode
+ldx #$40
+stx $4017	; disable APU frame IRQ
+ldx #$ff 	; Set up stack
+txs		;  .
+inx		; now X = 0
+stx PPUCTRL	; disable NMI
+stx PPUMASK 	; disable rendering
+stx $4010 	; disable DMC IRQs
 
 ;; first wait for vblank to make sure PPU is ready
 vblankwait1:
-  bit PPUSTATUS
-  bpl vblankwait1
+bit PPUSTATUS
+bpl vblankwait1
 
 clear_memory:
-  lda #$00
-  sta $0000, x
-  sta $0100, x
-  sta $0200, x
-  sta $0300, x
-  sta $0400, x
-  sta $0500, x
-  sta $0600, x
-  sta $0700, x
-  inx
-  bne clear_memory
-  
+lda #$00
+sta $0000, x
+sta $0100, x
+sta $0200, x
+sta $0300, x
+sta $0400, x
+sta $0500, x
+sta $0600, x
+sta $0700, x
+inx
+bne clear_memory
+
 ;; second wait for vblank, PPU is ready after this
 vblankwait2:
-  bit PPUSTATUS
-  bpl vblankwait2
+bit PPUSTATUS
+bpl vblankwait2
 
 main:
-
-  init_oamdata:
-    ldx #0
+    init_oamdata:
+    ; Write to CPU page $0200 to prep OAMDMA transfer
+    ldx #0 ; i = 0
     loop_init_oamdata:
-      lda #$ff ; load byte x of sprite list
-      sta OAMDATA ; 
-      inx
-      cpx #255
-      bne loop_init_oamdata
+        lda #$ff ; load garbage byte
+        sta SPRITE_BUFFER, x ; store into current address
+        inx ; i++
+        cpx #255 ; if i >= 255, break
+        bne loop_init_oamdata
+    
+    ; Load weird null sprites for first 2, i think 0 hit or something idk it fixes weird bugs
+    load_null_sprites:
+        ldx #0
+        loop_load_null_sprites:
+            lda null_sprite, x
+            sta SPRITE_BUFFER, x
+            inx
+            cpx #8
+            bne loop_load_null_sprites
+        stx available_oam ; Set available_oam to 8
 
-  load_sprites:
-    lda PPUSTATUS ; Check PPUSTATUS
-    lda #$00 ; Start @ OAMADDR 0
-    sta OAMADDR
+    load_palettes:
+        lda PPUSTATUS
+        lda #$3f
+        sta PPUADDR
+        lda #$00
+        sta PPUADDR
 
-    ldx #0
-    loop_load_sprites:
-      lda sprites, X ; load byte x of sprite list
-      sta OAMDATA ; 
-      inx
-      cpx #64
-      bne loop_load_sprites
+        ldx #$00
+        @loop:
+            lda palettes, x
+            sta PPUDATA
+            inx
+            cpx #$20
+            bne @loop
 
-  load_palettes:
-    lda PPUSTATUS
-    lda #$3f
-    sta PPUADDR
-    lda #$00
-    sta PPUADDR
+    render_initial_sprites:
+        ldx #100
+        stx x_coord
+        ldy #90
+        sty y_coord
 
-    ldx #$00
-    @loop:
-      lda palettes, x
-      sta PPUDATA
-      inx
-      cpx #$20
-      bne @loop
+        ldx #0
+        ldy #0
+        render_initial_sprites_loop:
+            lda x_coord
+            sta render_x
+            lda y_coord
+            sta render_y
+            lda ants, x
+            sta render_tile
+            jsr render_sprite
+            inx
+            iny
+            ; x += 16 since row is not finished
+            lda x_coord
+            clc
+            adc #16
+            sta x_coord
 
-enable_rendering:
-  lda #%10000000	; Enable NMI
-  sta PPUCTRL
-  lda #%00010110; Enable background and sprite rendering in PPUMASK.
-  sta PPUMASK
+            cpy #3
+            bne skip_reset_row_counter ; if y < 3, skip resetting x_coord
+            ; y += 16 since row is finished
+            ; x = 0
+            ldy #0
+            lda #100
+            sta x_coord
+            lda y_coord
+            clc
+            adc #16
+            sta y_coord
+            skip_reset_row_counter:
+            cpx #12
+            bne render_initial_sprites_loop  
+
+    enable_rendering:
+        lda #%10000000	; Enable NMI
+        sta PPUCTRL
+        lda #%00010110; Enable background and sprite rendering in PPUMASK.
+        sta PPUMASK
 
 forever:
-  jmp forever
+    
+    jmp forever
 
 nmi:
-  lda #$00
-  sta PPUSCROLL
-  lda #$00
-  sta PPUSCROLL
+    ; Start OAMDMA transfer
+    lda #$02          ; High byte of $0200 where SPRITE_BUFFER is located.
+    sta OAMDMA         ; Writing to OAMDMA register initiates the transfer.
 
-  rti
+    ; Frame counting, used for timing the sprite animation rendering
+    ; increased by 1 every frame, reset to 0 after 60 frames
+    lda frameCounter ; Load frameCounter
+    cmp #30 ; Compare frameCounter to 60
+    bne skip_reset_timer ; If frameCounter is not 60, skip resetting it
+    lda #$00 ; Reset frameCounter to 0
+    sta frameCounter ; Store 0 in frameCounter
 
+    skip_reset_timer: ; Skip resetting frameCounter and render_sprite subroutine
+    inc frameCounter ; Increase frameCounter by 1
 
+    ; Reset scroll position
+    lda #$00
+    sta PPUSCROLL
+    lda #$00
+    sta PPUSCROLL
+    rti
+
+render_sprite:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Write first tile of selected sprite
+
+    ; Render first tile of the sprite
+    jsr render_tile_subroutine  ; Call render_tile subroutine
+
+    ; Render second tile of the sprite
+    lda render_x
+    clc
+    adc #$08
+    sta render_x ; x = x + 8
+    lda render_tile
+    clc
+    adc #$01
+    sta render_tile
+    jsr render_tile_subroutine  ; Call render_tile subroutine
+
+    ; Render third tile of the sprite
+    lda render_y
+    clc
+    adc #$08
+    sta render_y ; y = y + 8
+
+    lda render_tile
+    clc
+    adc #$10
+    sta render_tile
+    jsr render_tile_subroutine  ; Call render_tile subroutine
+
+    ; Render fourth tile of the sprite
+    ; No need to update y since it's already at the bottom of the sprite
+    ; Only update x to move left by 8 pixels
+    lda render_x
+    sbc #8 ; WHY DOES THIS RESULT IS 0X4F (0X58 - 8) ITS SUPPOSED TO BE 0X50
+    tay
+    iny ; 0X4F + 1 = 0X50 (EZ FIX I THINK????)
+    sty render_x ; x = x - 8
+
+    ldy render_tile 
+    dey
+    sty render_tile
+    jsr render_tile_subroutine  ; Call render_tile subroutine
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
+render_tile_subroutine:
+    ldx available_oam ; Offset for OAM buffer
+
+    lda render_y
+    sta SPRITE_BUFFER, x
+    inx
+
+    lda render_tile
+    sta SPRITE_BUFFER, x
+    inx
+
+    lda #$00
+    sta SPRITE_BUFFER, x
+    inx
+
+    lda render_x
+    sta SPRITE_BUFFER, x
+    inx
+
+    stx available_oam ; Update available_oam to the next available OAM buffer index`
+
+    rts
 
 palettes:
 ; background palette
@@ -134,36 +277,21 @@ palettes:
 .byte $00, $00, $00, $00
 .byte $00, $00, $00, $00
 
-
-sprites:
-; up arrow big
+null_sprite: 
 .byte $00, $00, $00, $00
-.byte $00, $01, $00, $08
-.byte $08, $10, $00, $00
-.byte $08, $11, $00, $08
+.byte $00, $00, $00, $00
 
-; up arrow small
-.byte $00, $02, $00, $10
-.byte $00, $03, $00, $18
-.byte $08, $12, $00, $10
-.byte $08, $13, $00, $18
+ants:
+.byte $01, $03, $05
+.byte $21, $23, $25
+.byte $41, $43, $45
+.byte $61, $63, $65
 
-; down arrow big
-.byte $00, $04, $00, $20
-.byte $00, $05, $00, $28
-.byte $08, $14, $00, $20
-.byte $08, $15, $00, $28
-
-; down arrow small
-.byte $00, $06, $00, $30
-.byte $00, $07, $00, $38
-.byte $08, $16, $00, $30
-.byte $08, $17, $00, $38
-
-
-
+bg_tiles:
+.byte $01, $03, $05, $07
+.byte $21, $23, $25, $27
 
 
 ; Character memory
 .segment "CHARS"
-.incbin "tiles.chr"
+.incbin "ants.chr"
