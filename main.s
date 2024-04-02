@@ -79,6 +79,19 @@ bit PPUSTATUS
 bpl vblankwait2
 
 main:
+
+    ; Init zeropage vars
+    ldx #0
+    stx render_x
+    stx render_y
+    stx render_tile
+    stx available_oam
+    stx direction
+    stx animState
+    stx frameCounter
+    stx vblank_flag
+    stx isWalking
+
     init_oamdata:
     ; Write to CPU page $0200 to prep OAMDMA transfer
     ldx #0 ; i = 0
@@ -131,13 +144,17 @@ main:
         sta PPUMASK
 
 forever:
-    jsr handle_input
-    jsr update_player
-    jsr update_sprites
-    jmp forever
+    lda vblank_flag
+    cmp #1
+    bne NotNMISynced
+    NMISynced:
+        jsr handle_input
+        jsr update_player
+        jsr update_sprites
+    NotNMISynced:
+        jmp forever
 
 nmi:
-
     lda #1
     sta vblank_flag
 
@@ -249,156 +266,196 @@ update_sprites:
     ; Exit subroutine if frameCounter is not 29
     lda frameCounter
     cmp #29
-    bne skip_update_sprites
+    bne end_update_sprites
 
     ; Dont update sprites if vblank_flag is not set
     lda vblank_flag
     cmp #1
-    bne skip_update_sprites
+    bne end_update_sprites
 
-    ; If isWalking is not set, reset sprites
+    ; Skip animation if not walking
     lda isWalking
     cmp #0
-    beq reset_animState
+    beq end_update_sprites
 
-    ; Update sprites
-    ; If animState is 2, reset animState to 0 and reset sprite to first frame
     lda animState
-    cmp #2
-    bne skip_reset_animState
-
-    reset_animState:
-    ; Reset animState to 0
-    lda #$00
+    cmp #3
+    bne animate_sprite
+    lda #0
     sta animState
+    jmp end_update_sprites
 
-    ; Reset sprites to first frame
-    ldx #9 ; offset for buffer, where the tile data for tile 1 is stored
+    ; Animate sprite
+    animate_sprite:
+    ldx #9
     ldy #0
-    reset_sprites_loop:
-    lda SPRITE_BUFFER, x ; Load tile data for tile y
-    clc
-    sbc #3 ; Add 2 to the tile data to change the sprite to the next frame
-    sta SPRITE_BUFFER, x ; Store the updated tile data back to the buffer
-    txa ; Load x to a
-    clc
-    adc #4 ; Add 4 to x to move to the next tile data
-    tax ; Store the updated x back to x
-    iny ; Increase y by 1
-    cpy #4
-    bne reset_sprites_loop ; If y is not 16, loop back to reset_sprites_loop, since we have reset updated all sprites
+    animate_sprite_loop:
+        ; Load the correct sprite based on direction
+        lda SPRITE_BUFFER, x
+        clc
+        adc #2
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne animate_sprite_loop
 
-    ; Skip updating sprites since we just reset them
-    jmp skip_update_sprites
-
-    skip_reset_animState:
-    ; Update animation state
-    lda animState
-    clc
-    adc #1
-    sta animState
-
-    ldx #9 ; offset for buffer, where the tile data for tile 1 is stored
-    ldy #0
-    update_sprites_loop:
-    lda SPRITE_BUFFER, x ; Load tile data for tile y
-    clc
-    adc #2 ; Add 2 to the tile data to change the sprite to the next frame
-    sta SPRITE_BUFFER, x ; Store the updated tile data back to the buffer
-
-    txa ; Load x to a
-    clc
-    adc #4 ; Add 4 to x to move to the next tile data
-    tax ; Store the updated x back to x
-    iny ; Increase y by 1
-    cpy #16
-    bne update_sprites_loop ; If y is not 16, loop back to update_sprites_loop, since we have not updated all sprites
-
-    skip_update_sprites:
+    end_update_sprites:
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
     rts
 
 handle_input:
-    ; write a 1, then a 0, to CONTROLLER1
-    ; to latch button states
     lda #$01
-    sta CONTROLLER1
-    lda #$00 
-    sta CONTROLLER1
+    sta CONTROLLER1  ; Latch the controller state
+    lda #$00
+    sta CONTROLLER1  ; Complete the latch process
 
-    lda #%00000001
-    sta pad
+    lda #$00
+    sta pad    ; Initialize 'pad' to 0
 
-    get_buttons:
-    lda CONTROLLER1 ; Read next button's state ; A = %00000001
-    lsr A     ; 00000001 -> 00000000 C=1
-    rol pad  ; 00000000 -> 00000001 C=0
-                    ; onto right side of pad1
-                    ; and leftmost 0 of pad1 into carry flag
-    bcc get_buttons ; Continue until original "1" is in carry flag
+    ldx #$08   ; Prepare to read 8 buttons
+
+    read_button_loop:
+        lda CONTROLLER1       ; Read a button state
+        lsr             ; Shift right, moving the button state into the carry
+        rol pad         ; Rotate left through carry, moving the carry into 'pad'
+        dex             ; Decrement the count
+        bne read_button_loop  ; Continue until all 8 buttons are read
+
     rts
+
 
 update_player:
-    ; Dont check if frameCounter is not 29
+    ; stop if frameCounter is not 29
     lda frameCounter
     cmp #29
-    bne skip_update_player
+    bne end_update_intermediate
 
-    ; Dont update player if vblank_flag is not set
-    lda vblank_flag
-    cmp #1
-    bne skip_update_player
-
-    ; Update player
-    lda pad
-    and BTN_UP
-    bne player_move_up
-
-    lda pad
-    and BTN_DOWN
-    bne player_move_down
-
-    lda pad
-    and BTN_LEFT
-    bne player_move_left
-
-    lda pad
-    and BTN_RIGHT
-    bne player_move_right
-
-    ; If no buttons are pressed, disable isWalking
+    ; Assume no movement initially
     lda #0
     sta isWalking
-    jmp skip_update_player
-    
-    player_move_up:
-    lda #0
-    sta direction
-    jmp enable_is_walking
 
-    player_move_down:
+    ; Check each direction
+    lda pad
+    and #BTN_UP
+    beq check_down  ; If not pressed, check next button
+    lda #0          ; Direction for up
+    sta direction
+    lda #1          ; Indicate walking
+    sta isWalking
+    jmp update_done ; Skip further checks
+
+    check_down:
+    lda pad
+    and #BTN_DOWN
+    beq check_left
     lda #1
     sta direction
-    jmp enable_is_walking
+    lda #1
+    sta isWalking
+    jmp update_done
 
-    player_move_left:
+    check_left:
+    lda pad
+    and #BTN_LEFT
+    beq check_right
     lda #2
     sta direction
-    jmp enable_is_walking
-
-    player_move_right:
-    lda #3
-    sta direction
-    jmp enable_is_walking
-
-    enable_is_walking:
     lda #1
     sta isWalking
+    jmp update_done
 
-    skip_update_player:
+    check_right:
+    lda pad
+    and #BTN_RIGHT
+    beq update_done
+    lda #3
+    sta direction
+    lda #1
+    sta isWalking
+    jmp update_done
+
+    end_update_intermediate:
+    jmp end_update
+
+    update_done:
+    ldx direction
+    cpx #0
+    beq update_up
+    cpx #1
+    beq update_down
+    cpx #2
+    beq update_left
+    cpx #3
+    beq update_right
+
+
+    update_up:
+        ldx #9
+        ldy #0
+        update_up_loop:
+            lda ant_static_up, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_up_loop
+        jmp end_update
+    
+    update_down:
+        ldx #9
+        ldy #0
+        update_down_loop:
+            lda ant_static_down, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_down_loop
+        jmp end_update
+    
+    update_left:
+        ldx #9
+        ldy #0
+        update_left_loop:
+            lda ant_static_left, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_left_loop
+        jmp end_update
+    
+    update_right:
+        ldx #9
+        ldy #0
+        update_right_loop:
+            lda ant_static_right, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_right_loop
+        jmp end_update
+    
+    end_update:
     rts
-
 
 
 palettes:
@@ -418,8 +475,17 @@ null_sprite:
 .byte $00, $00, $00, $00
 .byte $00, $00, $00, $00
 
-ants:
-.byte $01, $21, $41, $61
+ant_static_up:
+.byte $01, $02, $12, $11
+
+ant_static_right:
+.byte $21, $22, $32, $31
+
+ant_static_down:
+.byte $41, $42, $52, $51
+
+ant_static_left:
+.byte $61, $62, $72, $71
 
 bg_tiles:
 .byte $01, $03, $05, $07
