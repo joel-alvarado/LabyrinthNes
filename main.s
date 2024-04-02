@@ -304,6 +304,7 @@ update_sprites:
         bne animate_sprite_loop
 
     end_update_sprites:
+    inc animState
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
     rts
