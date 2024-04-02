@@ -276,13 +276,23 @@ update_sprites:
     ; Skip animation if not walking
     lda isWalking
     cmp #0
-    beq end_update_sprites
-
-    lda animState
-    cmp #3
-    bne animate_sprite
+    beq reset_anim_state
+    jmp skip_reset_anim_state
+    reset_anim_state:
     lda #0
     sta animState
+    jmp end_update_sprites
+
+    skip_reset_anim_state:
+    ; Change base sprite based on direction
+    ; Increment animState for next frame, wrap around if needed
+    inc animState
+    lda animState
+    cmp #2 ; Assuming 2 frames of animation for simplicity
+    bcc animate_sprite
+    lda #0
+    sta animState
+    jsr change_base_sprite
     jmp end_update_sprites
 
     ; Animate sprite
@@ -302,9 +312,9 @@ update_sprites:
         iny
         cpy #4
         bne animate_sprite_loop
+    inc animState
 
     end_update_sprites:
-    inc animState
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
     rts
@@ -331,10 +341,6 @@ handle_input:
 
 
 update_player:
-    ; stop if frameCounter is not 29
-    lda frameCounter
-    cmp #29
-    bne end_update_intermediate
 
     ; Assume no movement initially
     lda #0
@@ -348,7 +354,8 @@ update_player:
     sta direction
     lda #1          ; Indicate walking
     sta isWalking
-    jmp update_done ; Skip further checks
+    jsr move_player_up
+    jmp end_update ; Skip further checks
 
     check_down:
     lda pad
@@ -358,7 +365,8 @@ update_player:
     sta direction
     lda #1
     sta isWalking
-    jmp update_done
+    jsr move_player_down
+    jmp end_update
 
     check_left:
     lda pad
@@ -368,22 +376,24 @@ update_player:
     sta direction
     lda #1
     sta isWalking
-    jmp update_done
+    jsr move_player_left
+    jmp end_update
 
     check_right:
     lda pad
     and #BTN_RIGHT
-    beq update_done
+    beq end_update
     lda #3
     sta direction
     lda #1
+    jsr move_player_right
     sta isWalking
-    jmp update_done
+    
+    end_update:
+    rts
 
-    end_update_intermediate:
-    jmp end_update
 
-    update_done:
+change_base_sprite:
     ldx direction
     cpx #0
     beq update_up
@@ -393,7 +403,6 @@ update_player:
     beq update_left
     cpx #3
     beq update_right
-
 
     update_up:
         ldx #9
@@ -454,10 +463,74 @@ update_player:
             cpy #4
             bne update_right_loop
         jmp end_update
-    
-    end_update:
+
+move_player_up:
+    ldx #SPRITE_Y_BASE_ADDR
+    ldy #0
+    move_player_up_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        sbc #1
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_up_loop
     rts
 
+move_player_down:
+    ldx #SPRITE_Y_BASE_ADDR
+    ldy #0
+    move_player_down_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        adc #2
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_down_loop
+    rts
+
+move_player_left:
+    ldx #SPRITE_X_BASE_ADDR
+    ldy #0
+    move_player_left_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        sbc #1
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_left_loop
+    rts
+
+move_player_right:
+    ldx #SPRITE_X_BASE_ADDR
+    ldy #0
+    move_player_right_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        adc #2
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_right_loop
+    rts
 
 palettes:
 ; background palette
