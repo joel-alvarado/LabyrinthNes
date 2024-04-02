@@ -103,12 +103,28 @@ main:
         sta PPUADDR
 
         ldx #$00
-        @loop:
+        @loop_palettes:
             lda palettes, x
             sta PPUDATA
             inx
             cpx #$20
-            bne @loop
+            nop
+            nop
+            bne @loop_palettes
+        
+        lda #$3f
+        sta PPUADDR
+        lda #$04
+        sta PPUADDR
+        lda #$0F
+        sta PPUDATA
+
+        lda #$3f
+        sta PPUADDR
+        lda #$08
+        sta PPUADDR
+        lda #$0F
+        sta PPUDATA
 
     render_initial_sprites:
         ldx #100
@@ -147,12 +163,81 @@ main:
             sta y_coord
             skip_reset_row_counter:
             cpx #12
-            bne render_initial_sprites_loop  
+            bne render_initial_sprites_loop
+    
+    load_name_table:
+        lda PPUSTATUS
+        lda #$22
+        sta PPUADDR
+        lda #$8c
+        sta PPUADDR
+
+        ldx #$00
+        @loop:
+            lda name_table, x
+            sta PPUDATA
+            inx
+            cpx #$8
+            bne @loop
+        
+        lda #$22
+        sta PPUADDR
+        lda #$ac
+        sta PPUADDR
+
+        @loop2:
+            lda name_table, x
+            sta PPUDATA
+            inx
+            cpx #16
+            bne @loop2
+        
+        lda #$22
+        sta PPUADDR
+        lda #$cc
+        sta PPUADDR
+
+        @loop3:
+            lda name_table, x
+            sta PPUDATA
+            inx
+            cpx #24
+            bne @loop3
+        
+        lda #$22
+        sta PPUADDR
+        lda #$ec
+        sta PPUADDR
+
+        @loop4:
+            lda name_table, x
+            sta PPUDATA
+            inx
+            cpx #32
+            bne @loop4     
+
+    load_attributes:
+        lda PPUSTATUS
+        lda #$23
+        sta PPUADDR
+        lda #$eb
+        sta PPUADDR
+
+        lda #%01010000
+        sta PPUDATA
+
+        lda #$23
+        sta PPUADDR
+        lda #$ec
+        sta PPUADDR
+
+        lda #%10010000
+        sta PPUDATA
 
     enable_rendering:
-        lda #%10000000	; Enable NMI
+        lda #%10010000	; Enable NMI
         sta PPUCTRL
-        lda #%00010110; Enable background and sprite rendering in PPUMASK.
+        lda #%00011110; Enable background and sprite rendering in PPUMASK.
         sta PPUMASK
 
 forever:
@@ -265,13 +350,11 @@ render_tile_subroutine:
     rts
 
 palettes:
-; background palette
-.byte $0F, $16, $13, $37
-.byte $00, $00, $00, $00
-.byte $00, $00, $00, $00
+.byte $0f, $10, $07, $2d
+.byte $0f, $00, $2a, $30
+.byte $0f, $28, $00, $29
 .byte $00, $00, $00, $00
 
-; sprite palette
 .byte $0F, $16, $13, $37
 .byte $00, $00, $00, $00
 .byte $00, $00, $00, $00
@@ -287,10 +370,11 @@ ants:
 .byte $41, $43, $45
 .byte $61, $63, $65
 
-bg_tiles:
-.byte $01, $03, $05, $07
-.byte $21, $23, $25, $27
-
+name_table:
+.byte $01, $02, $03, $04, $05, $06, $07, $08
+.byte $11, $12, $13, $14, $15, $16, $17, $18
+.byte $21, $22, $23, $24, $25, $26, $27, $28
+.byte $31, $32, $33, $34, $35, $36, $37, $38
 
 ; Character memory
 .segment "CHARS"
