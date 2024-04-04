@@ -28,6 +28,10 @@ direction: .res 1 ; 0 = up, 1 = down, 2 = left, 3 = right
 animState: .res 1 ; 0 = first frame, 1 = second frame, 2 = third frame
 frameCounter: .res 1 ; Counter for frames
 vblank_flag: .res 1 ; Flag for vblank
+isWalking: .res 1 ; Flag for walking to animate
+
+; Controller vars
+pad: .res 1 ; Controller 1 input
 
 .segment "BSS"
 x_coord: .res 1
@@ -75,6 +79,19 @@ bit PPUSTATUS
 bpl vblankwait2
 
 main:
+
+    ; Init zeropage vars
+    ldx #0
+    stx render_x
+    stx render_y
+    stx render_tile
+    stx available_oam
+    stx direction
+    stx animState
+    stx frameCounter
+    stx vblank_flag
+    stx isWalking
+
     init_oamdata:
     ; Write to CPU page $0200 to prep OAMDMA transfer
     ldx #0 ; i = 0
@@ -128,28 +145,13 @@ main:
         sta PPUDATA
 
     render_initial_sprites:
-        ldx #100
-        stx x_coord
-        ldy #90
-        sty y_coord
-
-        ldx #0
-        render_initial_sprites_loop:
-            lda x_coord
-            sta render_x
-            lda y_coord
-            sta render_y
-            lda ants, x
-            sta render_tile
-            jsr render_sprite
-            inx
-            lda x_coord
-            clc
-            adc #16
-            sta x_coord
-
-            cpx #4
-            bne render_initial_sprites_loop
+        lda #100
+        sta render_x
+        lda #100
+        sta render_y
+        lda #$01
+        sta render_tile
+        jsr render_sprite
 
     enable_rendering:
         lda #%10010000	; Enable NMI
@@ -158,11 +160,17 @@ main:
         sta PPUMASK
 
 forever:
-    jsr update_sprites
-    jmp forever
+    lda vblank_flag
+    cmp #1
+    bne NotNMISynced
+    NMISynced:
+        jsr handle_input
+        jsr update_player
+        jsr update_sprites
+    NotNMISynced:
+        jmp forever
 
 nmi:
-
     lda #1
     sta vblank_flag
 
@@ -274,70 +282,270 @@ update_sprites:
     ; Exit subroutine if frameCounter is not 29
     lda frameCounter
     cmp #29
-    bne skip_update_sprites
+    bne end_update_sprites
 
     ; Dont update sprites if vblank_flag is not set
     lda vblank_flag
     cmp #1
-    bne skip_update_sprites
+    bne end_update_sprites
 
-    ; Update sprites
-
-    ; If animState is 2, reset animState to 0 and reset sprites to first frame
-    lda animState
-    cmp #2
-    bne skip_reset_animState
-
-    ; Reset animState to 0
-    lda #$00
+    ; Skip animation if not walking
+    lda isWalking
+    cmp #0
+    beq reset_anim_state
+    jmp skip_reset_anim_state
+    reset_anim_state:
+    lda #0
     sta animState
+    jmp end_update_sprites
 
-    ; Reset sprites to first frame
-    ldx #9 ; offset for buffer, where the tile data for tile 1 is stored
-    ldy #0
-    reset_sprites_loop:
-    lda SPRITE_BUFFER, x ; Load tile data for tile y
-    clc
-    sbc #3 ; Add 2 to the tile data to change the sprite to the next frame
-    sta SPRITE_BUFFER, x ; Store the updated tile data back to the buffer
-    txa ; Load x to a
-    clc
-    adc #4 ; Add 4 to x to move to the next tile data
-    tax ; Store the updated x back to x
-    iny ; Increase y by 1
-    cpy #16
-    bne reset_sprites_loop ; If y is not 16, loop back to reset_sprites_loop, since we have reset updated all sprites
-
-    ; Skip updating sprites since we just reset them
-    jmp skip_update_sprites
-
-    skip_reset_animState:
-    ; Update animation state
+    skip_reset_anim_state:
+    ; Change base sprite based on direction
+    ; Increment animState for next frame, wrap around if needed
+    inc animState
     lda animState
-    clc
-    adc #1
+    cmp #2 ; Assuming 2 frames of animation for simplicity
+    bcc animate_sprite
+    lda #0
     sta animState
+    jsr change_base_sprite
+    jmp end_update_sprites
 
-    ldx #9 ; offset for buffer, where the tile data for tile 1 is stored
+    ; Animate sprite
+    animate_sprite:
+    ldx #9
     ldy #0
-    update_sprites_loop:
-    lda SPRITE_BUFFER, x ; Load tile data for tile y
-    clc
-    adc #2 ; Add 2 to the tile data to change the sprite to the next frame
-    sta SPRITE_BUFFER, x ; Store the updated tile data back to the buffer
+    animate_sprite_loop:
+        ; Load the correct sprite based on direction
+        lda SPRITE_BUFFER, x
+        clc
+        adc #2
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne animate_sprite_loop
+    inc animState
 
-    txa ; Load x to a
-    clc
-    adc #4 ; Add 4 to x to move to the next tile data
-    tax ; Store the updated x back to x
-    iny ; Increase y by 1
-    cpy #16
-    bne update_sprites_loop ; If y is not 16, loop back to update_sprites_loop, since we have not updated all sprites
-
+    end_update_sprites:
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
+    rts
 
-    skip_update_sprites:
+handle_input:
+    lda #$01
+    sta CONTROLLER1  ; Latch the controller state
+    lda #$00
+    sta CONTROLLER1  ; Complete the latch process
+
+    lda #$00
+    sta pad    ; Initialize 'pad' to 0
+
+    ldx #$08   ; Prepare to read 8 buttons
+
+    read_button_loop:
+        lda CONTROLLER1       ; Read a button state
+        lsr             ; Shift right, moving the button state into the carry
+        rol pad         ; Rotate left through carry, moving the carry into 'pad'
+        dex             ; Decrement the count
+        bne read_button_loop  ; Continue until all 8 buttons are read
+
+    rts
+
+
+update_player:
+
+    ; Assume no movement initially
+    lda #0
+    sta isWalking
+
+    ; Check each direction
+    lda pad
+    and #BTN_UP
+    beq check_down  ; If not pressed, check next button
+    lda #0          ; Direction for up
+    sta direction
+    lda #1          ; Indicate walking
+    sta isWalking
+    jsr move_player_up
+    jmp end_update ; Skip further checks
+
+    check_down:
+    lda pad
+    and #BTN_DOWN
+    beq check_left
+    lda #1
+    sta direction
+    lda #1
+    sta isWalking
+    jsr move_player_down
+    jmp end_update
+
+    check_left:
+    lda pad
+    and #BTN_LEFT
+    beq check_right
+    lda #2
+    sta direction
+    lda #1
+    sta isWalking
+    jsr move_player_left
+    jmp end_update
+
+    check_right:
+    lda pad
+    and #BTN_RIGHT
+    beq end_update
+    lda #3
+    sta direction
+    lda #1
+    jsr move_player_right
+    sta isWalking
+    
+    end_update:
+    rts
+
+
+change_base_sprite:
+    ldx direction
+    cpx #0
+    beq update_up
+    cpx #1
+    beq update_down
+    cpx #2
+    beq update_left
+    cpx #3
+    beq update_right
+
+    update_up:
+        ldx #9
+        ldy #0
+        update_up_loop:
+            lda ant_static_up, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_up_loop
+        jmp end_update
+    
+    update_down:
+        ldx #9
+        ldy #0
+        update_down_loop:
+            lda ant_static_down, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_down_loop
+        jmp end_update
+    
+    update_left:
+        ldx #9
+        ldy #0
+        update_left_loop:
+            lda ant_static_left, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_left_loop
+        jmp end_update
+    
+    update_right:
+        ldx #9
+        ldy #0
+        update_right_loop:
+            lda ant_static_right, y
+            sta SPRITE_BUFFER, x
+            txa
+            clc
+            adc #4
+            tax
+            iny
+            cpy #4
+            bne update_right_loop
+        jmp end_update
+
+move_player_up:
+    ldx #SPRITE_Y_BASE_ADDR
+    ldy #0
+    move_player_up_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        sbc #1
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_up_loop
+    rts
+
+move_player_down:
+    ldx #SPRITE_Y_BASE_ADDR
+    ldy #0
+    move_player_down_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        adc #2
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_down_loop
+    rts
+
+move_player_left:
+    ldx #SPRITE_X_BASE_ADDR
+    ldy #0
+    move_player_left_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        sbc #1
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_left_loop
+    rts
+
+move_player_right:
+    ldx #SPRITE_X_BASE_ADDR
+    ldy #0
+    move_player_right_loop:
+        lda SPRITE_BUFFER, x
+        clc
+        adc #2
+        sta SPRITE_BUFFER, x
+        txa
+        clc
+        adc #4
+        tax
+        iny
+        cpy #4
+        bne move_player_right_loop
     rts
 
 palettes:
@@ -355,8 +563,17 @@ null_sprite:
 .byte $00, $00, $00, $00
 .byte $00, $00, $00, $00
 
-ants:
-.byte $01, $21, $41, $61
+ant_static_up:
+.byte $01, $02, $12, $11
+
+ant_static_right:
+.byte $21, $22, $32, $31
+
+ant_static_down:
+.byte $41, $42, $52, $51
+
+ant_static_left:
+.byte $61, $62, $72, $71
 
 name_table:
 .byte $01, $02, $03, $04, $05, $06, $07, $08
