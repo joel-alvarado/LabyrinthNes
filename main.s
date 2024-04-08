@@ -604,12 +604,9 @@ ant_static_down:
 ant_static_left:
 .byte $61, $62, $72, $71
 
-name_table:
-.byte $01, $02, $03, $04, $05, $06, $07, $08
-.byte $11, $12, $13, $14, $15, $16, $17, $18
-.byte $21, $22, $23, $24, $25, $26, $27, $28
-.byte $31, $32, $33, $34, $35, $36, $37, $38
+name_table_packaged:
+.incbin "assets/nametables/output.bin"
 
 ; Character memory
 .segment "CHARS"
-.incbin "ants.chr"
+.incbin "assets/tilesets/ants.chr"
