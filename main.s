@@ -37,6 +37,14 @@ pad: .res 1 ; Controller 1 input
 x_coord: .res 1
 y_coord: .res 1
 
+; Nametable things
+NAMETABLE_PTR: .res 2
+SELECTED_TILE_WRITE: .res 1
+DECODED_BYTE_IDX: .res 1
+BYTE_TO_DECODE: .res 1
+BITS_FROM_BYTE: .res 1
+
+
 
 ; Main code segment for the program
 .segment "CODE"
@@ -158,21 +166,60 @@ main:
             nop
             nop
             bne @loop_palettes
+
+    load_nametable:
+        ; Init NAMETABLE_PTR to $2000
+        lda #$20
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+
+        ldx #0
+        read_nametable_loop:
+            lda nametable_packaged, x
+            sta BYTE_TO_DECODE
+            jsr decode_and_write_byte
+
+            ; Check if x+1 % 4 == 0, means we read 4 bytes, increment NAMETABLE_PTR by 32
+            txa
+            clc
+            adc #1
+            and #%00000011
+            beq increment_nametable_ptr
+            jmp skip_increment_nametable_ptr
+
+            increment_nametable_ptr:
+                lda NAMETABLE_PTR+1
+                clc
+                adc #32
+                sta NAMETABLE_PTR+1
+            
+                ; Check if carry, need to increment high byte
+                bcc skip_increment_nametable_ptr
+                inc NAMETABLE_PTR
+            
+            skip_increment_nametable_ptr:
+                inx 
+                cpx #60
+                bne read_nametable_loop
         
-        lda #$3f
+        ; Done writing nametable, now write attribute table
+    
+    load_attributes:
+        lda #$23
         sta PPUADDR
-        lda #$04
+        lda #$C0
         sta PPUADDR
-        lda #$0F
-        sta PPUDATA
 
-        lda #$3f
-        sta PPUADDR
-        lda #$08
-        sta PPUADDR
-        lda #$0F
-        sta PPUDATA
-
+        ldx #0
+        read_attribute_loop:
+            lda attribute_table, x
+            sta PPUDATA
+            inx
+            cpx #64
+            bne read_attribute_loop
+        ; Done writing attributes
+    
     render_initial_sprites:
         lda #100
         sta render_x
@@ -183,7 +230,7 @@ main:
         jsr render_sprite
 
     enable_rendering:
-        lda #%10010000	; Enable NMI
+        lda #%10000000	; Enable NMI
         sta PPUCTRL
         lda #%00011110; Enable background and sprite rendering in PPUMASK.
         sta PPUMASK
@@ -577,16 +624,132 @@ move_player_right:
         bne move_player_right_loop
     rts
 
-palettes:
-.byte $0f, $10, $07, $2d
-.byte $0f, $00, $2a, $30
-.byte $0f, $28, $00, $29
-.byte $00, $00, $00, $00
+write_2x2_region_nametable:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
 
-.byte $0F, $16, $13, $37
-.byte $00, $00, $00, $00
-.byte $00, $00, $00, $00
-.byte $00, $00, $00, $00
+    ; Write first tile of 2x2 region
+    lda NAMETABLE_PTR
+    sta PPUADDR
+    lda NAMETABLE_PTR+1
+    sta PPUADDR
+    lda SELECTED_TILE_WRITE
+    sta PPUDATA
+
+    ; Write second tile of 2x2 region
+    lda NAMETABLE_PTR
+    sta PPUADDR
+    lda NAMETABLE_PTR+1
+    clc
+    adc #1
+    sta PPUADDR
+    lda SELECTED_TILE_WRITE
+    clc
+    adc #1
+    sta PPUDATA
+
+    ; Write third tile of 2x2 region
+    lda NAMETABLE_PTR
+    sta PPUADDR
+    lda NAMETABLE_PTR+1
+    clc
+    adc #32
+    sta PPUADDR
+    lda SELECTED_TILE_WRITE
+    clc
+    adc #16
+    sta PPUDATA
+
+    ; Write fourth tile of 2x2 region
+    lda NAMETABLE_PTR
+    sta PPUADDR
+    lda NAMETABLE_PTR+1
+    clc
+    adc #33
+    sta PPUADDR
+    lda SELECTED_TILE_WRITE
+    clc
+    adc #17
+    sta PPUDATA
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
+decode_and_write_byte:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Loop through 2-bit pairs of the byte
+    ; Each 2-bit pair corresponds to the top left tile of a 2x2 megatile, 
+    ; can be used to index megatile array
+    ldx #0
+    read_bits_loop:
+        lda #$00
+        sta BITS_FROM_BYTE ; Clear BITS_FROM_BYTE
+        
+        lda BYTE_TO_DECODE ; Load byte to decode
+        clc
+        asl ; Sift to read 1 bit into carry
+        rol BITS_FROM_BYTE ; Rotate carry into BITS_FROM_BYTE
+        asl ; Sift to read 1 bit into carry
+        rol BITS_FROM_BYTE ; Rotate carry into BITS_FROM_BYTE
+        sta BYTE_TO_DECODE ; Save byte back to BYTE_TO_DECODE
+
+        ldy BITS_FROM_BYTE ; Save the 2-bit pair to X register
+        lda megatiles, y ; Load tile from megatiles array based on 2-bit pair
+        sta SELECTED_TILE_WRITE ; Save selected tile to SELECTED_TILE_WRITE
+
+        ; From SELECTED_TILE_WRITE, call write_region_2x2_nametable 
+        ; subroutine to write 2x2 region of nametable
+        ; based on the top left tile of the mega tile selected
+        jsr write_2x2_region_nametable
+
+        ; Move NAME_TABLE_PTR to next 2x2 region
+        lda NAMETABLE_PTR+1
+        clc
+        adc #2
+        sta NAMETABLE_PTR+1
+
+        ; Increment x to move to next 2-bit pair
+        inx
+        cpx #4
+        bne read_bits_loop
+    
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+        
+
+
+palettes:
+.byte $0f, $00, $10, $30
+.byte $0f, $01, $21, $31
+.byte $0f, $06, $27, $17
+.byte $0f, $09, $19, $29
+
+.byte $0f, $00, $10, $30
+.byte $0f, $01, $21, $31
+.byte $0f, $06, $27, $17
+.byte $0f, $09, $19, $29
 
 null_sprite: 
 .byte $00, $00, $00, $00
@@ -604,9 +767,15 @@ ant_static_down:
 ant_static_left:
 .byte $61, $62, $72, $71
 
-name_table_packaged:
-.incbin "assets/nametables/output.bin"
+nametable_packaged:
+.incbin "assets/nametables/stage_one_left_packaged.bin"
+
+attribute_table:
+.incbin "assets/nametables/stage_one_left_attributes.bin"
+
+megatiles:
+.byte $07, $29, $09, $27
 
 ; Character memory
 .segment "CHARS"
-.incbin "assets/tilesets/ants.chr"
+.incbin "assets/tilesets/ants_and_bg_tiles.chr"
