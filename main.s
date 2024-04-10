@@ -42,6 +42,8 @@ SELECTED_TILE_WRITE: .res 1
 DECODED_BYTE_IDX: .res 1
 BYTE_TO_DECODE: .res 1
 BITS_FROM_BYTE: .res 1
+SCROLL_POSITION_X: .res 1
+SCROLL_POSITION_Y: .res 1
 
 
 
@@ -236,6 +238,13 @@ main:
         jsr load_attributes
 
     enable_rendering:
+
+        ; Set PPUSCROLL to 0,0
+        lda #$00
+        sta PPUSCROLL
+        lda #$00
+        sta PPUSCROLL
+
         lda #%10000000	; Enable NMI
         sta PPUCTRL
         lda #%00011110; Enable background and sprite rendering in PPUMASK.
@@ -253,6 +262,14 @@ forever:
         jmp forever
 
 nmi:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Set vblank_flag to 1
     lda #1
     sta vblank_flag
 
@@ -263,19 +280,37 @@ nmi:
     ; Frame counting, used for timing the sprite animation rendering
     ; increased by 1 every frame, reset to 0 after 60 frames
     lda frameCounter ; Load frameCounter
-    cmp #30 ; Compare frameCounter to 60
+    cmp #31 ; Compare frameCounter to 30
     bne skip_reset_timer ; If frameCounter is not 60, skip resetting it
     lda #$00 ; Reset frameCounter to 0
     sta frameCounter ; Store 0 in frameCounter
-
+    jmp scroll_screen_check ; Skip resetting frameCounter and render_sprite subroutine
+    
     skip_reset_timer: ; Skip resetting frameCounter and render_sprite subroutine
     inc frameCounter ; Increase frameCounter by 1
 
-    ; Reset scroll position
-    lda #$00
+    scroll_screen_check:
+    ; TODO Stop at 255
+    lda SCROLL_POSITION_X
+    cmp #255
+    beq skip_scroll_increment
+
+    ; Increment PPUSCROLL to scroll the screen by 2 pxs/second 
+    inc SCROLL_POSITION_X
+
+    skip_scroll_increment:
+    lda SCROLL_POSITION_X
     sta PPUSCROLL
-    lda #$00
+    lda SCROLL_POSITION_Y
     sta PPUSCROLL
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
     rti
 
 render_sprite:
