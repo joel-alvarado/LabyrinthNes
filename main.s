@@ -295,7 +295,7 @@ nmi:
     cmp #255
     beq skip_scroll_increment
 
-    ; Increment PPUSCROLL to scroll the screen by 2 pxs/second 
+    ; Increment PPUSCROLL to scroll the screen by 60 pxs/second 
     inc SCROLL_POSITION_X
 
     skip_scroll_increment:
