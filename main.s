@@ -44,8 +44,10 @@ BYTE_TO_DECODE: .res 1
 BITS_FROM_BYTE: .res 1
 SCROLL_POSITION_X: .res 1
 SCROLL_POSITION_Y: .res 1
+need_update_nametable: .res 1
 
-
+; Gameplay things
+CURRENT_STAGE: .res 1
 
 .segment "BSS"
 x_coord: .res 1
@@ -166,7 +168,7 @@ main:
 
         ldx #$00
         @loop_palettes:
-            lda palettes, x
+            lda stage_one_palettes, x
             sta PPUDATA
             inx
             cpx #$20
@@ -184,6 +186,10 @@ main:
         jsr render_sprite
     
     load_nametable:
+
+        ; Set stage to 1
+        lda #1
+        sta CURRENT_STAGE
 
         ; Select first nametable
         lda #<stage_one_left_packaged
@@ -256,6 +262,7 @@ forever:
     bne NotNMISynced
     NMISynced:
         jsr handle_input
+        jsr handle_nametable_change
         jsr update_player
         jsr update_sprites
     NotNMISynced:
@@ -751,7 +758,7 @@ decode_and_write_byte:
         sta BYTE_TO_DECODE ; Save byte back to BYTE_TO_DECODE
 
         ldy BITS_FROM_BYTE ; Save the 2-bit pair to X register
-        lda megatiles, y ; Load tile from megatiles array based on 2-bit pair
+        lda megatiles_stage_one, y ; Load tile from megatiles array based on 2-bit pair
         sta SELECTED_TILE_WRITE ; Save selected tile to SELECTED_TILE_WRITE
 
         ; From SELECTED_TILE_WRITE, call write_region_2x2_nametable 
@@ -789,6 +796,10 @@ write_nametable:
     pha
     tya
     pha
+
+    ; Wait for vblank
+    lda PPUSTATUS
+    
 
     ldx #0
     read_nametable_loop:
@@ -859,9 +870,224 @@ load_attributes:
 
     rts
 
+handle_nametable_change:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; If A was not pressed, skip to end
+    lda pad
+    and #BTN_A
+    beq skip_nametable_change
+
+    ; Disable disable NMI and screen
+    lda PPUCTRL
+    and #%01111111
+    sta PPUCTRL
+    lda PPUMASK
+    and #%11100000
+    sta PPUMASK
+
+    vblankwait3:
+        bit PPUSTATUS
+        bpl vblankwait3
+
+
+    ; If in stage one, set to stage two
+    ; If in stage two, set to stage one
+    lda CURRENT_STAGE
+    cmp #1
+    beq set_stage_two
+    lda CURRENT_STAGE
+    cmp #2
+    beq set_stage_one
+
+    set_stage_two:
+        lda #1
+        sta need_update_nametable
+        lda #2
+        sta CURRENT_STAGE
+        jmp call_update_nametable
+    
+    set_stage_one:
+        lda #1
+        sta need_update_nametable
+        lda #1
+        sta CURRENT_STAGE
+        jmp call_update_nametable
+    
+    call_update_nametable:
+        ; Set scroll position to 0,0
+        lda #$00
+        sta SCROLL_POSITION_X
+        sta SCROLL_POSITION_Y
+        jsr update_nametable
+
+    skip_nametable_change:
+
+
+    ; Restore NMI and screen
+    lda #$80
+    sta PPUCTRL
+    lda #$1e
+    sta PPUMASK
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+    
+    rts
+
+update_nametable:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Check if need_update_nametable is set
+    lda need_update_nametable
+    cmp #1
+    bne skip_update_nametable_intermediate
+
+    ; Select nametable based on CURRENT_STAGE
+    lda CURRENT_STAGE
+    cmp #1
+    beq select_stage_one
+
+    lda CURRENT_STAGE
+    cmp #2
+    beq select_stage_two
+
+    select_stage_one:
+        ; Load stage one left nametables
+        lda #<stage_one_left_packaged
+        sta SELECTED_NAMETABLE
+        lda #>stage_one_left_packaged
+        sta SELECTED_NAMETABLE+1
+
+        lda #$20
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+        jsr write_nametable
+
+        ; Load stage one left attributes
+        lda #<stage_one_left_attributes
+        sta SELECTED_ATTRIBUTES
+        lda #>stage_one_left_attributes
+        sta SELECTED_ATTRIBUTES+1
+
+        lda #$23
+        sta NAMETABLE_PTR
+        lda #$C0
+        sta NAMETABLE_PTR+1
+        jsr load_attributes
+
+        ; Load stage one right nametables
+        lda #<stage_one_right_packaged
+        sta SELECTED_NAMETABLE
+        lda #>stage_one_right_packaged
+        sta SELECTED_NAMETABLE+1
+
+        lda #$24
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+        jsr write_nametable
+
+        ; Load stage one right attributes
+        lda #<stage_one_right_attributes
+        sta SELECTED_ATTRIBUTES
+        lda #>stage_one_right_attributes
+        sta SELECTED_ATTRIBUTES+1
+
+        lda #$27
+        sta NAMETABLE_PTR
+        lda #$C0
+        sta NAMETABLE_PTR+1
+        jsr load_attributes
+
+        jmp skip_update_nametable
+
+
+    skip_update_nametable_intermediate:
+        jmp skip_update_nametable
+    
+    select_stage_two:
+        ; Load stage two left nametables
+        lda #<stage_two_left_packaged
+        sta SELECTED_NAMETABLE
+        lda #>stage_two_left_packaged
+        sta SELECTED_NAMETABLE+1
+
+        lda #$20
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+        jsr write_nametable
+
+        ; Load stage two left attributes
+        lda #<stage_two_left_attributes
+        sta SELECTED_ATTRIBUTES
+        lda #>stage_two_left_attributes
+        sta SELECTED_ATTRIBUTES+1
+
+        lda #$23
+        sta NAMETABLE_PTR
+        lda #$C0
+        sta NAMETABLE_PTR+1
+        jsr load_attributes
+
+        ; Load stage two right nametables
+        lda #<stage_two_right_packaged
+        sta SELECTED_NAMETABLE
+        lda #>stage_two_right_packaged
+        sta SELECTED_NAMETABLE+1
+
+        lda #$24
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+        jsr write_nametable
+
+        ; Load stage two right attributes
+        lda #<stage_two_right_attributes
+        sta SELECTED_ATTRIBUTES
+        lda #>stage_two_right_attributes
+        sta SELECTED_ATTRIBUTES+1
+
+        lda #$27
+        sta NAMETABLE_PTR
+        lda #$C0
+        sta NAMETABLE_PTR+1
+        jsr load_attributes
+
+        jmp skip_update_nametable
+
+    skip_update_nametable:
+    ; Set need_update_nametable to 0
+    lda #0
+    sta need_update_nametable
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
 
 ; BYTEARRAYS
-palettes:
+stage_one_palettes:
 .byte $0f, $00, $10, $30
 .byte $0f, $01, $21, $31
 .byte $0f, $06, $27, $17
@@ -888,18 +1114,31 @@ ant_static_down:
 ant_static_left:
 .byte $61, $62, $72, $71
 
+; Stage one nametables and attributes
 stage_one_left_packaged:
 .incbin "assets/nametables/stage_one_left_packaged.bin"
 stage_one_left_attributes:
 .incbin "assets/nametables/stage_one_left_attributes.bin"
-
 stage_one_right_packaged:
 .incbin "assets/nametables/stage_one_right_packaged.bin"
 stage_one_right_attributes:
 .incbin "assets/nametables/stage_one_right_attributes.bin"
 
-megatiles:
-.byte $07, $29, $09, $27
+; Stage two nametables and attributes
+stage_two_left_packaged:
+.incbin "assets/nametables/stage_two_left_packaged.bin"
+stage_two_left_attributes:
+.incbin "assets/nametables/stage_two_left_attributes.bin"
+stage_two_right_packaged:
+.incbin "assets/nametables/stage_two_right_packaged.bin"
+stage_two_right_attributes:
+.incbin "assets/nametables/stage_two_right_attributes.bin"
+
+; Megatiles
+megatiles_stage_one:
+.byte $07, $09, $27, $29
+megatiles_stage_two:
+.byte $0b, $0d, $2b, $2d
 
 ; Character memory
 .segment "CHARS"
