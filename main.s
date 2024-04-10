@@ -33,16 +33,21 @@ isWalking: .res 1 ; Flag for walking to animate
 ; Controller vars
 pad: .res 1 ; Controller 1 input
 
-.segment "BSS"
-x_coord: .res 1
-y_coord: .res 1
-
 ; Nametable things
+; These are used for nametable subroutines
 NAMETABLE_PTR: .res 2
+SELECTED_NAMETABLE: .res 2
+SELECTED_ATTRIBUTES: .res 2
 SELECTED_TILE_WRITE: .res 1
 DECODED_BYTE_IDX: .res 1
 BYTE_TO_DECODE: .res 1
 BITS_FROM_BYTE: .res 1
+
+
+
+.segment "BSS"
+x_coord: .res 1
+y_coord: .res 1
 
 
 
@@ -166,59 +171,6 @@ main:
             nop
             nop
             bne @loop_palettes
-
-    load_nametable:
-        ; Init NAMETABLE_PTR to $2000
-        lda #$20
-        sta NAMETABLE_PTR
-        lda #$00
-        sta NAMETABLE_PTR+1
-
-        ldx #0
-        read_nametable_loop:
-            lda nametable_packaged, x
-            sta BYTE_TO_DECODE
-            jsr decode_and_write_byte
-
-            ; Check if x+1 % 4 == 0, means we read 4 bytes, increment NAMETABLE_PTR by 32
-            txa
-            clc
-            adc #1
-            and #%00000011
-            beq increment_nametable_ptr
-            jmp skip_increment_nametable_ptr
-
-            increment_nametable_ptr:
-                lda NAMETABLE_PTR+1
-                clc
-                adc #32
-                sta NAMETABLE_PTR+1
-            
-                ; Check if carry, need to increment high byte
-                bcc skip_increment_nametable_ptr
-                inc NAMETABLE_PTR
-            
-            skip_increment_nametable_ptr:
-                inx 
-                cpx #60
-                bne read_nametable_loop
-        
-        ; Done writing nametable, now write attribute table
-    
-    load_attributes:
-        lda #$23
-        sta PPUADDR
-        lda #$C0
-        sta PPUADDR
-
-        ldx #0
-        read_attribute_loop:
-            lda attribute_table, x
-            sta PPUDATA
-            inx
-            cpx #64
-            bne read_attribute_loop
-        ; Done writing attributes
     
     render_initial_sprites:
         lda #100
@@ -228,6 +180,60 @@ main:
         lda #$01
         sta render_tile
         jsr render_sprite
+    
+    load_nametable:
+
+        ; Select first nametable
+        lda #<stage_one_left_packaged
+        sta SELECTED_NAMETABLE
+        lda #>stage_one_left_packaged
+        sta SELECTED_NAMETABLE+1
+
+        ; Select first attribute table
+        lda #<stage_one_left_attributes
+        sta SELECTED_ATTRIBUTES
+        lda #>stage_one_left_attributes
+        sta SELECTED_ATTRIBUTES+1
+
+        ; $2000 for first nametable
+        lda #$20
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+        jsr write_nametable
+
+        ; $23C0 for first attribute table
+        lda #$23
+        sta NAMETABLE_PTR
+        lda #$C0
+        sta NAMETABLE_PTR+1
+        jsr load_attributes
+
+        ; Select second nametable
+        lda #<stage_one_right_packaged
+        sta SELECTED_NAMETABLE
+        lda #>stage_one_right_packaged
+        sta SELECTED_NAMETABLE+1
+
+        ; Select second attribute table
+        lda #<stage_one_right_attributes
+        sta SELECTED_ATTRIBUTES
+        lda #>stage_one_right_attributes
+        sta SELECTED_ATTRIBUTES+1
+
+        ; $2400 for second nametable
+        lda #$24
+        sta NAMETABLE_PTR
+        lda #$00
+        sta NAMETABLE_PTR+1
+        jsr write_nametable
+
+        ; $27C0 for second attribute table
+        lda #$27
+        sta NAMETABLE_PTR
+        lda #$C0
+        sta NAMETABLE_PTR+1
+        jsr load_attributes
 
     enable_rendering:
         lda #%10000000	; Enable NMI
@@ -737,9 +743,89 @@ decode_and_write_byte:
     pla
 
     rts
+
+; Loads, decodes and writes a nametable at NAME_TABLE_PTR 
+; from a packaged nametable in ROM
+write_nametable:
+
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ldx #0
+    read_nametable_loop:
+        txa
+        tay
+        lda (SELECTED_NAMETABLE), y
+        sta BYTE_TO_DECODE
+        jsr decode_and_write_byte
+
+        ; Check if x+1 % 4 == 0, means we read 4 bytes, increment NAMETABLE_PTR by 32
+        txa
+        clc
+        adc #1
+        and #%00000011
+        beq increment_nametable_ptr
+        jmp skip_increment_nametable_ptr
+
+        increment_nametable_ptr:
+            lda NAMETABLE_PTR+1
+            clc
+            adc #32
+            sta NAMETABLE_PTR+1
         
+            ; Check if carry, need to increment high byte
+            bcc skip_increment_nametable_ptr
+            inc NAMETABLE_PTR
+        
+        skip_increment_nametable_ptr:
+            inx 
+            cpx #60
+            bne read_nametable_loop
+    
+    ; Done with subroutine, pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
+; Writes attributes to NAME_TABLE_PTR from attributes in ROM
+load_attributes:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ldx #0
+    read_attribute_loop:
+        txa
+        tay
+        lda (SELECTED_ATTRIBUTES), y
+        sta PPUDATA
+        inx
+        cpx #64
+        bne read_attribute_loop
+    ; Done writing attributes
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
 
 
+; BYTEARRAYS
 palettes:
 .byte $0f, $00, $10, $30
 .byte $0f, $01, $21, $31
@@ -767,11 +853,15 @@ ant_static_down:
 ant_static_left:
 .byte $61, $62, $72, $71
 
-nametable_packaged:
+stage_one_left_packaged:
 .incbin "assets/nametables/stage_one_left_packaged.bin"
-
-attribute_table:
+stage_one_left_attributes:
 .incbin "assets/nametables/stage_one_left_attributes.bin"
+
+stage_one_right_packaged:
+.incbin "assets/nametables/stage_one_right_packaged.bin"
+stage_one_right_attributes:
+.incbin "assets/nametables/stage_one_right_attributes.bin"
 
 megatiles:
 .byte $07, $29, $09, $27
