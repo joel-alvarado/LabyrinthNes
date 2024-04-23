@@ -44,6 +44,7 @@ BYTE_TO_DECODE: .res 1
 BITS_FROM_BYTE: .res 1
 SCROLL_POSITION_X: .res 1
 SCROLL_POSITION_Y: .res 1
+MEGATILES_PTR: .res 2
 need_update_nametable: .res 1
 
 ; Gameplay things
@@ -758,7 +759,7 @@ decode_and_write_byte:
         sta BYTE_TO_DECODE ; Save byte back to BYTE_TO_DECODE
 
         ldy BITS_FROM_BYTE ; Save the 2-bit pair to X register
-        lda megatiles_stage_one, y ; Load tile from megatiles array based on 2-bit pair
+        lda (MEGATILES_PTR), y ; Load tile from megatiles based on 2-bit pair
         sta SELECTED_TILE_WRITE ; Save selected tile to SELECTED_TILE_WRITE
 
         ; From SELECTED_TILE_WRITE, call write_region_2x2_nametable 
@@ -797,10 +798,28 @@ write_nametable:
     tya
     pha
 
-    ; Wait for vblank
-    lda PPUSTATUS
-    
+    ; Based on CURRENT_STAGE, select the correct megatiles
+    lda CURRENT_STAGE
+    cmp #1
+    beq select_megatiles_stage_one
+    cmp #2
+    beq select_megatiles_stage_two
 
+    select_megatiles_stage_one:
+        lda #<megatiles_stage_one
+        sta MEGATILES_PTR
+        lda #>megatiles_stage_one
+        sta MEGATILES_PTR+1
+        jmp decode_and_write_nametable
+    
+    select_megatiles_stage_two:
+        lda #<megatiles_stage_two
+        sta MEGATILES_PTR
+        lda #>megatiles_stage_two
+        sta MEGATILES_PTR+1
+        jmp decode_and_write_nametable
+
+    decode_and_write_nametable:
     ldx #0
     read_nametable_loop:
         txa
@@ -901,7 +920,6 @@ handle_nametable_change:
     lda CURRENT_STAGE
     cmp #1
     beq set_stage_two
-    lda CURRENT_STAGE
     cmp #2
     beq set_stage_one
 
@@ -927,7 +945,6 @@ handle_nametable_change:
         jsr update_nametable
 
     skip_nametable_change:
-
 
     ; Restore NMI and screen
     lda #$80
@@ -1136,7 +1153,7 @@ stage_two_right_attributes:
 
 ; Megatiles
 megatiles_stage_one:
-.byte $07, $09, $27, $29
+.byte $07, $29, $09, $27
 megatiles_stage_two:
 .byte $0b, $0d, $2b, $2d
 
