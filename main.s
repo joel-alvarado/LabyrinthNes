@@ -46,12 +46,14 @@ BITS_FROM_BYTE: .res 1
 SCROLL_POSITION_X: .res 1
 SCROLL_POSITION_Y: .res 1
 MEGATILES_PTR: .res 2
+CURRENT_STAGE_SIDE: .res 1 ; 0 = left, 1 = right
 need_update_nametable: .res 1
 
 ; Gameplay things
 CURRENT_STAGE: .res 1
 PLAYER_X: .res 1
 PLAYER_Y: .res 1
+SCROLL_STAGE: .res 1
 
 ; Collission stuff
 COLLISION_MAP_PTR: .res 2
@@ -81,7 +83,8 @@ OAMDATA   = $2004
 OAMDMA    = $4014
 
 SPRITE_BUFFER = $0200
-COLLISION_MAP = $0300
+COLLISION_MAP_LEFT = $0300
+COLLISION_MAP_RIGHT = $0400
 
 CONTROLLER1 = $4016
 CONTROLLER2 = $4017
@@ -150,18 +153,11 @@ main:
     stx vblank_flag
     stx isWalking
 
-    ; Init collision map pointer to start at base address COLLISION_MAP
-    lda #>COLLISION_MAP
+    ; Init collision map pointer to start at base address COLLISION_MAP_LEFT
+    lda #>COLLISION_MAP_LEFT
     sta COLLISION_MAP_PTR+1
-    lda #<COLLISION_MAP
+    lda #<COLLISION_MAP_LEFT
     sta COLLISION_MAP_PTR
-
-    ; DEBUGGING
-    ; SET TILE 0 and 15 to 1 for collision
-    lda #1
-    ldx #50
-    sta COLLISION_MAP, x
-    ; END DEBUGGING
 
     init_oamdata:
     ; Write to CPU page $0200 to prep OAMDMA transfer
@@ -222,6 +218,10 @@ main:
         lda #1
         sta CURRENT_STAGE
 
+        ; Set current stage side to 0
+        lda #0
+        sta CURRENT_STAGE_SIDE
+
         ; Select first nametable
         lda #<stage_one_left_packaged
         sta SELECTED_NAMETABLE
@@ -247,6 +247,15 @@ main:
         lda #$C0
         sta NAMETABLE_PTR+1
         jsr load_attributes
+
+        ; Set current stage side to 1 (right)
+        lda #1
+        sta CURRENT_STAGE_SIDE
+
+        ; Increment high byte of COLLISION_MAP_PTR to point to the next 240 bytes (0x0400)
+        ; This is because the collision map is 240 bytes long, and we cant overwrite
+        ; the first 240 bytes of the collision map with the second stage collision map
+        inc COLLISION_MAP_PTR+1
 
         ; Select second nametable
         lda #<stage_one_right_packaged
@@ -274,6 +283,10 @@ main:
         sta NAMETABLE_PTR+1
         jsr load_attributes
 
+        ; Reset current stage side to 0
+        lda #0
+        sta CURRENT_STAGE_SIDE
+
     enable_rendering:
 
         ; Set PPUSCROLL to 0,0
@@ -297,6 +310,7 @@ forever:
         jsr update_player
         jsr update_sprites
     NotNMISynced:
+        jsr main_game_loop
         jsr handle_collision
         jmp forever
 
@@ -329,15 +343,18 @@ nmi:
     inc frameCounter ; Increase frameCounter by 1
 
     scroll_screen_check:
-    ; TODO Stop at 255
+    lda SCROLL_STAGE
+    cmp #0
+    beq skip_scroll_screen
+
+    ; Scroll screen right 1px and player left 1px
     lda SCROLL_POSITION_X
-    cmp #255
-    beq skip_scroll_increment
+    clc
+    adc #1
+    sta SCROLL_POSITION_X
+    jsr move_player_left
 
-    ; Increment PPUSCROLL to scroll the screen by 60 pxs/second 
-    ; inc SCROLL_POSITION_X
-
-    skip_scroll_increment:
+    skip_scroll_screen:
     lda SCROLL_POSITION_X
     sta PPUSCROLL
     lda SCROLL_POSITION_Y
@@ -523,6 +540,13 @@ update_sprites:
     rts
 
 handle_input:
+    ; No input read if scroll_stage is not 0
+    lda SCROLL_STAGE
+    cmp #0
+    beq input_read
+    rts
+
+    input_read:
     ; Save registers to stack
     pha
     txa
@@ -556,6 +580,13 @@ handle_input:
     rts
 
 update_player:
+    ; Disable player movement if scroll_stage is not 0
+    lda SCROLL_STAGE
+    cmp #0
+    beq continue_update_player
+    rts
+
+    continue_update_player:
     ; Save registers to stack
     pha
     txa
@@ -946,6 +977,32 @@ decode_and_write_byte:
         lda (MEGATILES_PTR), y ; Load tile from megatiles based on 2-bit pair
         sta SELECTED_TILE_WRITE ; Save selected tile to SELECTED_TILE_WRITE
 
+        ; Set value of COLLISION_MAP_PTR based on selected tile
+        ; If selected tile is collidable (val == $09 or $27 or $0d or $2b), set to 1
+        ; Otherwise, set to 0
+        lda SELECTED_TILE_WRITE
+        cmp #$09
+        beq set_collision_map_one
+        cmp #$27
+        beq set_collision_map_one
+        cmp #$0d
+        beq set_collision_map_one
+        cmp #$2b
+        beq set_collision_map_one
+        jmp set_collision_map_zero
+
+        set_collision_map_one:
+            lda #1
+            ldy #0
+        sta (COLLISION_MAP_PTR), y
+        jmp skip_set_collision_map_zero
+        set_collision_map_zero:
+            lda #0
+            ldy #0
+            sta (COLLISION_MAP_PTR), y
+
+        skip_set_collision_map_zero:
+        inc COLLISION_MAP_PTR
         ; From SELECTED_TILE_WRITE, call write_region_2x2_nametable 
         ; subroutine to write 2x2 region of nametable
         ; based on the top left tile of the mega tile selected
@@ -1036,6 +1093,12 @@ write_nametable:
             bne read_nametable_loop
     
     ; Done with subroutine, pop registers from stack
+    ; Reset COLLISION_MAP_PTR to base address COLLISION_MAP_LEFT
+    lda #>COLLISION_MAP_LEFT
+    sta COLLISION_MAP_PTR+1
+    lda #<COLLISION_MAP_LEFT
+    sta COLLISION_MAP_PTR
+
     pla
     tay
     pla
@@ -1174,6 +1237,11 @@ update_nametable:
         lda #>stage_one_left_packaged
         sta SELECTED_NAMETABLE+1
 
+        ; Set current stage side to 0 (left)
+        lda #0
+        sta CURRENT_STAGE_SIDE
+        jsr update_collision_ptr
+
         lda #$20
         sta NAMETABLE_PTR
         lda #$00
@@ -1197,6 +1265,11 @@ update_nametable:
         sta SELECTED_NAMETABLE
         lda #>stage_one_right_packaged
         sta SELECTED_NAMETABLE+1
+
+        ; Set current stage side to 1 (right)
+        lda #1
+        sta CURRENT_STAGE_SIDE
+        jsr update_collision_ptr
 
         lda #$24
         sta NAMETABLE_PTR
@@ -1241,6 +1314,11 @@ update_nametable:
         lda #>stage_two_left_attributes
         sta SELECTED_ATTRIBUTES+1
 
+        ; Set current stage side to 0 (left)
+        lda #0
+        sta CURRENT_STAGE_SIDE
+        jsr update_collision_ptr
+
         lda #$23
         sta NAMETABLE_PTR
         lda #$C0
@@ -1252,6 +1330,11 @@ update_nametable:
         sta SELECTED_NAMETABLE
         lda #>stage_two_right_packaged
         sta SELECTED_NAMETABLE+1
+
+        ; Set current stage side to 1 (right)
+        lda #1
+        sta CURRENT_STAGE_SIDE
+        jsr update_collision_ptr
 
         lda #$24
         sta NAMETABLE_PTR
@@ -1288,9 +1371,13 @@ update_nametable:
     rts
 
 handle_collision:
-    ; Check if player is colliding with a collidable megatile
-    ; If so, handle collision
+    ; Ignore collision check if scroll_stage is 1
+    lda SCROLL_STAGE
+    cmp #1
+    bne collision_check
+    rts
 
+    collision_check:
     ; Save registers to stack
     pha
     txa
@@ -1298,12 +1385,11 @@ handle_collision:
     tya
     pha
 
-    ; Load player's megatile index
     ; Depending on direction, collision check will be different
-    ; If player is moving up, check (x, y) and (x+16, y), this checks top boundary of player
-    ; If player is moving down, check (x, y+16) and (x+16, y+16), this checks bottom boundary of player
-    ; If player is moving left, check (x, y) and (x, y+16), this checks left boundary of player
-    ; If player is moving right, check (x+16, y) and (x+16, y+16), this checks right boundary of player
+    ; If player is moving up, check (x, y) and (x+15, y), this checks top boundary of player
+    ; If player is moving down, check (x, y+15) and (x15, y+15), this checks bottom boundary of player
+    ; If player is moving left, check (x, y) and (x, y+15), this checks left boundary of player
+    ; If player is moving right, check (x+15, y) and (x+15, y+15), this checks right boundary of player
     lda direction
     cmp #0
     beq check_up_collision
@@ -1512,6 +1598,102 @@ coord_to_megatile:
 
     rts
 
+main_game_loop:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    jsr update_collision_ptr
+    
+    continue_game_loop:
+    ; If SCROLL_STAGE == 1 and SCROLL_POSITION_X == 255, stop scrolling
+    lda SCROLL_STAGE
+    cmp #1
+    bne check_if_need_scroll
+    lda SCROLL_POSITION_X
+    cmp #255
+    bne skip_side_change
+
+    ; Stop scrolling since SCROLL_POSITION_X == 255
+    lda #0
+    sta SCROLL_STAGE
+
+    ; Move player 16 pixels to the right
+    ldx #0
+    move_p_16_right:
+        jsr move_player_right
+        inx
+        cpx #16
+        bne move_p_16_right
+
+    jmp skip_side_change
+
+    check_if_need_scroll:
+    ; If player reached end of stage one left, change current_side
+    ; If playerx == 240 and playery == 64, change current_side to 1 (right)
+    lda PLAYER_X
+    cmp #240
+    bne skip_side_change
+    lda PLAYER_Y
+    cmp #64
+    bne skip_side_change
+    lda #1
+    sta CURRENT_STAGE_SIDE
+
+    ; Start transition to scroll to the right
+    lda #1
+    sta SCROLL_STAGE
+
+    skip_side_change:
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
+update_collision_ptr:
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Set COLLISION_MAP_PTR based on current side
+    lda CURRENT_STAGE_SIDE
+    cmp #0
+    beq set_collision_map_left
+    cmp #1
+    beq set_collision_map_right
+
+    set_collision_map_left:
+        lda #<COLLISION_MAP_LEFT
+        sta COLLISION_MAP_PTR
+        lda #>COLLISION_MAP_LEFT
+        sta COLLISION_MAP_PTR+1
+        jmp end_update_collision_ptr
+    
+    set_collision_map_right:
+        lda #<COLLISION_MAP_RIGHT
+        sta COLLISION_MAP_PTR
+        lda #>COLLISION_MAP_RIGHT
+        sta COLLISION_MAP_PTR+1
+    
+    end_update_collision_ptr:
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
+
 ; BYTEARRAYS
 stage_one_palettes:
 .byte $0f, $00, $10, $30
@@ -1564,7 +1746,7 @@ stage_two_right_attributes:
 megatiles_stage_one:
 .byte $07, $29, $09, $27 ; Only $09 and $27 are collidable
 megatiles_stage_two:
-.byte $0b, $0d, $2b, $2d
+.byte $0b, $0d, $2b, $2d ; Only $0d and $2b are collidable
 
 ; Character memory
 .segment "CHARS"
