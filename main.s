@@ -17,7 +17,6 @@
 .segment "STARTUP"
 
 .segment "ZEROPAGE"
-changed_direction: .res 1
 ; Args for render_sprite subroutine
 render_x: .res 1
 render_y: .res 1
@@ -72,6 +71,8 @@ PLAYER_MEGATILE_IDX: .res 1
 .segment "BSS"
 x_coord: .res 1
 y_coord: .res 1
+
+
 
 ; Main code segment for the program
 .segment "CODE"
@@ -153,7 +154,6 @@ main:
     stx render_tile
     stx available_oam
     stx direction
-    stx changed_direction
     stx animState
     stx frameCounter
     stx vblank_flag
@@ -202,19 +202,13 @@ main:
             bne @loop_palettes
     
     render_initial_sprites:
-        lda #0
+        lda #100
         sta render_x
-        lda #143
+        lda #100
         sta render_y
         lda #$01
         sta render_tile
         jsr render_sprite
-
-        ; Weird bug, PPU writes the tile in x+1, y+1, so PLAYER_X and PLAYER_Y are offset by 1
-        lda #0
-        sta PLAYER_X
-        lda #144
-        sta PLAYER_Y
     
     load_nametable:
 
@@ -445,14 +439,6 @@ render_sprite:
     rts
 
 render_tile_subroutine:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
-
-
     ldx available_oam ; Offset for OAM buffer
 
     lda render_y
@@ -473,23 +459,9 @@ render_tile_subroutine:
 
     stx available_oam ; Update available_oam to the next available OAM buffer index`
 
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
-
     rts
 
 update_sprites:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
-
     ; Exit subroutine if frameCounter is not 29
     lda frameCounter
     cmp #29
@@ -499,9 +471,6 @@ update_sprites:
     lda vblank_flag
     cmp #1
     bne end_update_sprites
-
-    ; Uupdate base sprite based on direction
-    jsr change_base_sprite
 
     ; Skip animation if not walking
     lda isWalking
@@ -522,6 +491,7 @@ update_sprites:
     bcc animate_sprite
     lda #0
     sta animState
+    jsr change_base_sprite
     jmp end_update_sprites
 
     ; Animate sprite
@@ -546,13 +516,6 @@ update_sprites:
     end_update_sprites:
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
-
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
     rts
 
 handle_input:
@@ -587,13 +550,8 @@ handle_input:
         dex             ; Decrement the count
         bne read_button_loop  ; Continue until all 8 buttons are read
 
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
     rts
+
 
 update_player:
     ; Disable player movement if scroll_stage is not 0
@@ -654,26 +612,14 @@ update_player:
     lda #3
     sta direction
     lda #1
-    sta isWalking
     jsr move_player_right
+    sta isWalking
     
     end_update:
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
     rts
 
-change_base_sprite:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
 
+change_base_sprite:
     ldx direction
     cpx #0
     beq update_up
@@ -697,7 +643,7 @@ change_base_sprite:
             iny
             cpy #4
             bne update_up_loop
-        jmp end_change_base_sprite
+        jmp end_update
     
     update_down:
         ldx #9
@@ -712,7 +658,7 @@ change_base_sprite:
             iny
             cpy #4
             bne update_down_loop
-        jmp end_change_base_sprite
+        jmp end_update
     
     update_left:
         ldx #9
@@ -727,7 +673,7 @@ change_base_sprite:
             iny
             cpy #4
             bne update_left_loop
-        jmp end_change_base_sprite
+        jmp end_update
     
     update_right:
         ldx #9
@@ -742,30 +688,14 @@ change_base_sprite:
             iny
             cpy #4
             bne update_right_loop
-        jmp end_change_base_sprite
-    
-    end_change_base_sprite:
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
-    rts
+        jmp end_update
 
 move_player_up:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
-
     ldx #SPRITE_Y_BASE_ADDR
     ldy #0
     move_player_up_loop:
         lda SPRITE_BUFFER, x
-        sec
+        clc
         sbc #1
         sta SPRITE_BUFFER, x
         txa
@@ -775,35 +705,15 @@ move_player_up:
         iny
         cpy #4
         bne move_player_up_loop
-    
-    ; Update player's y position
-    lda PLAYER_Y
-    sec
-    sbc #1
-    sta PLAYER_Y
-    
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
     rts
 
 move_player_down:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
-
     ldx #SPRITE_Y_BASE_ADDR
     ldy #0
     move_player_down_loop:
         lda SPRITE_BUFFER, x
         clc
-        adc #1
+        adc #2
         sta SPRITE_BUFFER, x
         txa
         clc
@@ -812,35 +722,14 @@ move_player_down:
         iny
         cpy #4
         bne move_player_down_loop
-    
-    ; Update player's y position
-    lda PLAYER_Y
-    clc
-    adc #1
-    sta PLAYER_Y
-
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
-
     rts
 
 move_player_left:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
-
     ldx #SPRITE_X_BASE_ADDR
     ldy #0
     move_player_left_loop:
         lda SPRITE_BUFFER, x
-        sec
+        clc
         sbc #1
         sta SPRITE_BUFFER, x
         txa
@@ -850,36 +739,15 @@ move_player_left:
         iny
         cpy #4
         bne move_player_left_loop
-
-    ; Update player's x position
-    lda PLAYER_X
-    sec
-    sbc #1
-    sta PLAYER_X
-
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
-
     rts
 
 move_player_right:
-    ; Save registers to stack
-    pha
-    txa
-    pha
-    tya
-    pha
-
     ldx #SPRITE_X_BASE_ADDR
     ldy #0
     move_player_right_loop:
         lda SPRITE_BUFFER, x
         clc
-        adc #1
+        adc #2
         sta SPRITE_BUFFER, x
         txa
         clc
@@ -888,20 +756,6 @@ move_player_right:
         iny
         cpy #4
         bne move_player_right_loop
-    
-    ; Update player's x position
-    lda PLAYER_X
-    clc
-    adc #1
-    sta PLAYER_X
-
-    ; Pop registers from stack
-    pla
-    tay
-    pla
-    tax
-    pla
-
     rts
 
 write_2x2_region_nametable:
@@ -974,7 +828,7 @@ decode_and_write_byte:
     pha
 
     ; Loop through 2-bit pairs of the byte
-    ; Each 2-bit pair corresponds to the top left tile of a 2x2 megatile,
+    ; Each 2-bit pair corresponds to the top left tile of a 2x2 megatile, 
     ; can be used to index megatile array
     ldx #0
     read_bits_loop:
