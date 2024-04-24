@@ -17,6 +17,7 @@
 .segment "STARTUP"
 
 .segment "ZEROPAGE"
+changed_direction: .res 1
 ; Args for render_sprite subroutine
 render_x: .res 1
 render_y: .res 1
@@ -49,12 +50,20 @@ need_update_nametable: .res 1
 
 ; Gameplay things
 CURRENT_STAGE: .res 1
+PLAYER_X: .res 1
+PLAYER_Y: .res 1
+
+; Collission stuff
+COLLISION_MAP_PTR: .res 2
+COLLISION_CHECK_X: .res 1
+COLLISION_CHECK_Y: .res 1
+
+; Debugging vars!
+PLAYER_MEGATILE_IDX: .res 1
 
 .segment "BSS"
 x_coord: .res 1
 y_coord: .res 1
-
-
 
 ; Main code segment for the program
 .segment "CODE"
@@ -72,6 +81,7 @@ OAMDATA   = $2004
 OAMDMA    = $4014
 
 SPRITE_BUFFER = $0200
+COLLISION_MAP = $0300
 
 CONTROLLER1 = $4016
 CONTROLLER2 = $4017
@@ -134,10 +144,24 @@ main:
     stx render_tile
     stx available_oam
     stx direction
+    stx changed_direction
     stx animState
     stx frameCounter
     stx vblank_flag
     stx isWalking
+
+    ; Init collision map pointer to start at base address COLLISION_MAP
+    lda #>COLLISION_MAP
+    sta COLLISION_MAP_PTR+1
+    lda #<COLLISION_MAP
+    sta COLLISION_MAP_PTR
+
+    ; DEBUGGING
+    ; SET TILE 0 and 15 to 1 for collision
+    lda #1
+    ldx #50
+    sta COLLISION_MAP, x
+    ; END DEBUGGING
 
     init_oamdata:
     ; Write to CPU page $0200 to prep OAMDMA transfer
@@ -178,13 +202,19 @@ main:
             bne @loop_palettes
     
     render_initial_sprites:
-        lda #100
+        lda #0
         sta render_x
-        lda #100
+        lda #143
         sta render_y
         lda #$01
         sta render_tile
         jsr render_sprite
+
+        ; Weird bug, PPU writes the tile in x+1, y+1, so PLAYER_X and PLAYER_Y are offset by 1
+        lda #0
+        sta PLAYER_X
+        lda #144
+        sta PLAYER_Y
     
     load_nametable:
 
@@ -267,6 +297,7 @@ forever:
         jsr update_player
         jsr update_sprites
     NotNMISynced:
+        jsr handle_collision
         jmp forever
 
 nmi:
@@ -304,7 +335,7 @@ nmi:
     beq skip_scroll_increment
 
     ; Increment PPUSCROLL to scroll the screen by 60 pxs/second 
-    inc SCROLL_POSITION_X
+    ; inc SCROLL_POSITION_X
 
     skip_scroll_increment:
     lda SCROLL_POSITION_X
@@ -381,6 +412,14 @@ render_sprite:
     rts
 
 render_tile_subroutine:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+
     ldx available_oam ; Offset for OAM buffer
 
     lda render_y
@@ -391,7 +430,7 @@ render_tile_subroutine:
     sta SPRITE_BUFFER, x
     inx
 
-    lda #$00
+    lda #$01
     sta SPRITE_BUFFER, x
     inx
 
@@ -401,9 +440,23 @@ render_tile_subroutine:
 
     stx available_oam ; Update available_oam to the next available OAM buffer index`
 
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
     rts
 
 update_sprites:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     ; Exit subroutine if frameCounter is not 29
     lda frameCounter
     cmp #29
@@ -413,6 +466,9 @@ update_sprites:
     lda vblank_flag
     cmp #1
     bne end_update_sprites
+
+    ; Uupdate base sprite based on direction
+    jsr change_base_sprite
 
     ; Skip animation if not walking
     lda isWalking
@@ -433,7 +489,6 @@ update_sprites:
     bcc animate_sprite
     lda #0
     sta animState
-    jsr change_base_sprite
     jmp end_update_sprites
 
     ; Animate sprite
@@ -458,9 +513,23 @@ update_sprites:
     end_update_sprites:
     lda #$00 ; Reset vblank_flag
     sta vblank_flag
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
     rts
 
 handle_input:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     lda #$01
     sta CONTROLLER1  ; Latch the controller state
     lda #$00
@@ -478,10 +547,21 @@ handle_input:
         dex             ; Decrement the count
         bne read_button_loop  ; Continue until all 8 buttons are read
 
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
     rts
 
-
 update_player:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
 
     ; Assume no movement initially
     lda #0
@@ -527,14 +607,26 @@ update_player:
     lda #3
     sta direction
     lda #1
-    jsr move_player_right
     sta isWalking
+    jsr move_player_right
     
     end_update:
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
     rts
 
-
 change_base_sprite:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     ldx direction
     cpx #0
     beq update_up
@@ -558,7 +650,7 @@ change_base_sprite:
             iny
             cpy #4
             bne update_up_loop
-        jmp end_update
+        jmp end_change_base_sprite
     
     update_down:
         ldx #9
@@ -573,7 +665,7 @@ change_base_sprite:
             iny
             cpy #4
             bne update_down_loop
-        jmp end_update
+        jmp end_change_base_sprite
     
     update_left:
         ldx #9
@@ -588,7 +680,7 @@ change_base_sprite:
             iny
             cpy #4
             bne update_left_loop
-        jmp end_update
+        jmp end_change_base_sprite
     
     update_right:
         ldx #9
@@ -603,14 +695,30 @@ change_base_sprite:
             iny
             cpy #4
             bne update_right_loop
-        jmp end_update
+        jmp end_change_base_sprite
+    
+    end_change_base_sprite:
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+    rts
 
 move_player_up:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     ldx #SPRITE_Y_BASE_ADDR
     ldy #0
     move_player_up_loop:
         lda SPRITE_BUFFER, x
-        clc
+        sec
         sbc #1
         sta SPRITE_BUFFER, x
         txa
@@ -620,15 +728,35 @@ move_player_up:
         iny
         cpy #4
         bne move_player_up_loop
+    
+    ; Update player's y position
+    lda PLAYER_Y
+    sec
+    sbc #1
+    sta PLAYER_Y
+    
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
     rts
 
 move_player_down:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     ldx #SPRITE_Y_BASE_ADDR
     ldy #0
     move_player_down_loop:
         lda SPRITE_BUFFER, x
         clc
-        adc #2
+        adc #1
         sta SPRITE_BUFFER, x
         txa
         clc
@@ -637,14 +765,35 @@ move_player_down:
         iny
         cpy #4
         bne move_player_down_loop
+    
+    ; Update player's y position
+    lda PLAYER_Y
+    clc
+    adc #1
+    sta PLAYER_Y
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
     rts
 
 move_player_left:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     ldx #SPRITE_X_BASE_ADDR
     ldy #0
     move_player_left_loop:
         lda SPRITE_BUFFER, x
-        clc
+        sec
         sbc #1
         sta SPRITE_BUFFER, x
         txa
@@ -654,15 +803,36 @@ move_player_left:
         iny
         cpy #4
         bne move_player_left_loop
+
+    ; Update player's x position
+    lda PLAYER_X
+    sec
+    sbc #1
+    sta PLAYER_X
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
     rts
 
 move_player_right:
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
     ldx #SPRITE_X_BASE_ADDR
     ldy #0
     move_player_right_loop:
         lda SPRITE_BUFFER, x
         clc
-        adc #2
+        adc #1
         sta SPRITE_BUFFER, x
         txa
         clc
@@ -671,6 +841,20 @@ move_player_right:
         iny
         cpy #4
         bne move_player_right_loop
+    
+    ; Update player's x position
+    lda PLAYER_X
+    clc
+    adc #1
+    sta PLAYER_X
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
     rts
 
 write_2x2_region_nametable:
@@ -743,7 +927,7 @@ decode_and_write_byte:
     pha
 
     ; Loop through 2-bit pairs of the byte
-    ; Each 2-bit pair corresponds to the top left tile of a 2x2 megatile, 
+    ; Each 2-bit pair corresponds to the top left tile of a 2x2 megatile,
     ; can be used to index megatile array
     ldx #0
     read_bits_loop:
@@ -1103,6 +1287,231 @@ update_nametable:
 
     rts
 
+handle_collision:
+    ; Check if player is colliding with a collidable megatile
+    ; If so, handle collision
+
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Load player's megatile index
+    ; Depending on direction, collision check will be different
+    ; If player is moving up, check (x, y) and (x+16, y), this checks top boundary of player
+    ; If player is moving down, check (x, y+16) and (x+16, y+16), this checks bottom boundary of player
+    ; If player is moving left, check (x, y) and (x, y+16), this checks left boundary of player
+    ; If player is moving right, check (x+16, y) and (x+16, y+16), this checks right boundary of player
+    lda direction
+    cmp #0
+    beq check_up_collision
+    cmp #1
+    beq check_down_collision
+    cmp #2
+    beq check_left_collision
+    cmp #3
+    beq check_right_collission_intermediate
+
+    check_up_collision:
+        ; Check top left boundary of player (x, y)
+        lda PLAYER_X
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne continue_check_up_collision
+        jsr move_player_down
+        jmp end_collision_check_intermediate
+        
+        continue_check_up_collision:
+        ; Check top right boundary of player (x+15, y)
+        lda PLAYER_X
+        clc
+        adc #15
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne end_collision_check_intermediate
+        jsr move_player_down
+        jmp end_collision_check_intermediate
+    
+    check_down_collision:
+        ; Check bottom left boundary of player (x, y+15)
+        lda PLAYER_X
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        clc
+        adc #15
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne continue_check_down_collision
+        jsr move_player_up
+        jmp end_collision_check_intermediate
+
+        continue_check_down_collision:
+        ; Check bottom right boundary of player (x+15, y+15)
+        lda PLAYER_X
+        clc
+        adc #15
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        clc
+        adc #15
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne end_collision_check_intermediate
+        jsr move_player_up
+        jmp end_collision_check_intermediate
+    
+    end_collision_check_intermediate:
+        jmp end_collision_check
+
+    check_right_collission_intermediate:
+        jmp check_right_collision
+    
+    check_left_collision:
+        ; Check top left boundary of player (x, y)
+        lda PLAYER_X
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne continue_check_left_collision
+        jsr move_player_right
+        jmp end_collision_check
+
+        continue_check_left_collision:
+        ; Check bottom left boundary of player (x, y+15)
+        lda PLAYER_X
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        clc
+        adc #15
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne end_collision_check
+        jsr move_player_right
+        jmp end_collision_check
+
+    check_right_collision:
+        ; Check top right boundary of player (x+15, y)
+        lda PLAYER_X
+        clc
+        adc #15
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne continue_check_right_collision
+        jsr move_player_left
+        jmp end_collision_check
+
+        continue_check_right_collision:
+        ; Check bottom right boundary of player (x+15, y+15)
+        lda PLAYER_X
+        clc
+        adc #15
+        sta COLLISION_CHECK_X
+        lda PLAYER_Y
+        clc
+        adc #15
+        sta COLLISION_CHECK_Y
+        jsr coord_to_megatile
+
+        ldy PLAYER_MEGATILE_IDX
+        lda (COLLISION_MAP_PTR), y
+        cmp #1
+        bne end_collision_check
+        jsr move_player_left
+        jmp end_collision_check
+
+    end_collision_check:
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
+coord_to_megatile:
+    ; Will convert player's x and y to megatile index 
+    ; in the nametable and replace the megatile with a different one
+
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Calulate player's x and y to megatile index using formula (y/16)*16 + (x/16)
+    ; Divide PLAYER_X by 16 to get the x megatile index
+    lda COLLISION_CHECK_X
+    lsr
+    lsr
+    lsr
+    lsr
+    sta PLAYER_MEGATILE_IDX
+
+    ; Divide PLAYER_Y by 16 to get the y megatile index
+    lda COLLISION_CHECK_Y
+    lsr
+    lsr
+    lsr
+    lsr
+
+    ; Multiply y megatile index by 16
+    asl
+    asl
+    asl
+    asl
+
+    ; Add x megatile index to y megatile index
+    clc
+    adc PLAYER_MEGATILE_IDX
+    sta PLAYER_MEGATILE_IDX
+
+    ; Pop registers from stack
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
+
 ; BYTEARRAYS
 stage_one_palettes:
 .byte $0f, $00, $10, $30
@@ -1153,7 +1562,7 @@ stage_two_right_attributes:
 
 ; Megatiles
 megatiles_stage_one:
-.byte $07, $29, $09, $27
+.byte $07, $29, $09, $27 ; Only $09 and $27 are collidable
 megatiles_stage_two:
 .byte $0b, $0d, $2b, $2d
 
