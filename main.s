@@ -1736,13 +1736,17 @@ ant_static_left:
 
 ; Stage one nametables and attributes
 stage_one_left_packaged:
-.incbin "assets/nametables/stage_one_left_packaged.bin"
+.incbin "assets/nametables/stage_one/stage_one_left_packaged.bin"
 stage_one_left_attributes:
-.incbin "assets/nametables/stage_one_left_attributes.bin"
+.incbin "assets/nametables/stage_one/stage_one_left_attributes.bin"
 stage_one_right_packaged:
-.incbin "assets/nametables/stage_one_right_packaged.bin"
+.incbin "assets/nametables/stage_one/stage_one_right_packaged.bin"
 stage_one_right_attributes:
-.incbin "assets/nametables/stage_one_right_attributes.bin"
+.incbin "assets/nametables/stage_one/stage_one_right_attributes.bin"
+stage_one_left_data:
+.incbin "assets/nametables/stage_one/stage_one_left_data.bin"
+stage_one_right_data:
+.incbin "assets/nametables/stage_one/stage_one_right_data.bin"
 
 ; Stage two nametables and attributes
 stage_two_left_packaged:
