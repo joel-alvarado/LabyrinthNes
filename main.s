@@ -1074,20 +1074,19 @@ write_nametable:
         clc
         adc #1
         and #%00000011
-        beq increment_nametable_ptr
-        jmp skip_increment_nametable_ptr
+        beq increment_lowbyte_nametable_ptr
+        jmp continue_next_byte
 
-        increment_nametable_ptr:
+        increment_lowbyte_nametable_ptr:
             lda NAMETABLE_PTR+1
             clc
             adc #32
             sta NAMETABLE_PTR+1
+            lda #0
+            adc NAMETABLE_PTR
+            sta NAMETABLE_PTR
         
-            ; Check if carry, need to increment high byte
-            bcc skip_increment_nametable_ptr
-            inc NAMETABLE_PTR
-        
-        skip_increment_nametable_ptr:
+        continue_next_byte:
             inx 
             cpx #60
             bne read_nametable_loop
@@ -1098,6 +1097,10 @@ write_nametable:
     sta COLLISION_MAP_PTR+1
     lda #<COLLISION_MAP_LEFT
     sta COLLISION_MAP_PTR
+
+    ; Set initial CURRENT_STAGE_SIDE to 0
+    lda #0
+    sta CURRENT_STAGE_SIDE
 
     pla
     tay
@@ -1554,6 +1557,15 @@ handle_collision:
 coord_to_megatile:
     ; Will convert player's x and y to megatile index 
     ; in the nametable and replace the megatile with a different one
+
+    ; Fix for unaligned collisions due to ppuscroll bug of 1 pixel offset
+    ; If current side is 1 (right), add 1 to x
+    lda CURRENT_STAGE_SIDE
+    cmp #1
+    bne skip_fix_collision
+    ; COLLISION_CHECK_X = COLLISION_CHECK_X + 1
+    dec COLLISION_CHECK_X
+    skip_fix_collision:
 
     ; Save registers to stack
     pha
