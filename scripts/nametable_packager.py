@@ -18,7 +18,7 @@ tile_to_idx_map = {
     TILE.CUBE.value: 2,
     TILE.CUBE_INV.value: 3,
     TILE.ENTRANCE.value: 0,
-    TILE.EXIT.value: 1,
+    TILE.EXIT.value: 0,
 }
 
 
