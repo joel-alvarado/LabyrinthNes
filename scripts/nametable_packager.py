@@ -4,27 +4,38 @@ from enum import Enum
 
 
 class TILE(Enum):
-    BRICKS = 0x07
-    BRICKS_INV = 0x29
-    CUBE = 0x09
-    CUBE_INV = 0x27
+    # Stage one tiles
+    AIR = 0x07
+    WOOD = 0x09
+    IRON = 0x27
+    BUSH = 0x29
+
+    # Stage two tiles
+    AIR_2 = 0x0B
+    BROKEN_BRICKS = 0x0D
+    BROKEN_IRON = 0x2B
+    SPIDERWEB = 0x2D
+
+    # Logic tiles
     ENTRANCE = 0x5D
     EXIT = 0x5E
 
 
 tile_to_idx_map = {
-    TILE.BRICKS.value: 0,
-    TILE.BRICKS_INV.value: 1,
-    TILE.CUBE.value: 2,
-    TILE.CUBE_INV.value: 3,
+    TILE.AIR.value: 0,
+    TILE.WOOD.value: 1,
+    TILE.IRON.value: 2,
+    TILE.BUSH.value: 3,
+    TILE.AIR_2.value: 0,
+    TILE.BROKEN_BRICKS.value: 1,
+    TILE.BROKEN_IRON.value: 2,
+    TILE.SPIDERWEB.value: 3,
     TILE.ENTRANCE.value: 0,
     TILE.EXIT.value: 0,
 }
 
 
-def main():
-    # Assume the binary file name is passed as the first argument
-    binary_file_name = sys.argv[1]
+def handle_nametable_bin(binary_file_name):
     binary_file_size = os.stat(binary_file_name).st_size
     bytes = read_bytes(binary_file_name, binary_file_size)
     attributes = extract_attributes_from_bytes(bytes)
@@ -32,9 +43,7 @@ def main():
     stage_data = extract_stage_data_from_bytes(bytes)
     write_bytes(binary_file_name.replace(".bin", "_packaged.bin"), packaged_bytes)
     write_bytes(binary_file_name.replace(".bin", "_attributes.bin"), attributes)
-    write_bytes(
-        binary_file_name.replace(".bin", "_stage_data.bin"), bytearray(stage_data)
-    )
+    write_bytes(binary_file_name.replace(".bin", "_data.bin"), bytearray(stage_data))
 
 
 def read_bytes(file_name, file_size) -> bytearray:
@@ -58,9 +67,9 @@ def extract_stage_data_from_bytes(bytes):
             base_idx = (row * 32) + col
             x, y = base_idx % 32, base_idx // 32
             if bytes[base_idx] == TILE.ENTRANCE.value:
-                start_stage_coords = (x * 8 + 1, y * 8)
+                start_stage_coords = (x * 8, y * 8)
             elif bytes[base_idx] == TILE.EXIT.value:
-                end_stage_coords = (x * 8 + 1, y * 8)
+                end_stage_coords = (x * 8, y * 8)
     stage_data = [
         start_stage_coords[0],
         start_stage_coords[1],
@@ -95,6 +104,13 @@ def package_bytes(bytes):
             # Calculate the index for the top-left tile of each 2x2 region
             base_idx = (row * width) + (col * 2)
 
+            if bytes[base_idx] == TILE.ENTRANCE.value:
+                print("Entrance found at", base_idx)
+                print("Entrance will be saved as", tile_to_idx_map[TILE.ENTRANCE.value])
+            elif bytes[base_idx] == TILE.EXIT.value:
+                print("Exit found at", base_idx)
+                print("Exit will be saved as", tile_to_idx_map[TILE.ENTRANCE.value])
+
             # Extract the first tile of each 2x2 region in the 8x2 area
             # and convert them to their 2-bit representations
             first_bytes = [
@@ -117,5 +133,5 @@ def write_bytes(file_name, bytes):
         f.write(bytes)
 
 
-if __name__ == "__main__":
-    main()
+# if __name__ == "__main__":
+#     main()

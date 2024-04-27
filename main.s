@@ -54,6 +54,12 @@ CURRENT_STAGE: .res 1
 PLAYER_X: .res 1
 PLAYER_Y: .res 1
 SCROLL_STAGE: .res 1
+CURRENT_STAGE_PTR: .res 2
+CURRENT_START_X: .res 1
+CURRENT_START_Y: .res 1
+CURRENT_END_X: .res 1
+CURRENT_END_Y: .res 1
+STARTED_ON_NEW_SECTION: .res 1
 
 ; Collission stuff
 COLLISION_MAP_PTR: .res 2
@@ -193,8 +199,6 @@ main:
             sta PPUDATA
             inx
             cpx #$20
-            nop
-            nop
             bne @loop_palettes
     
     render_initial_sprites:
@@ -287,6 +291,15 @@ main:
         lda #0
         sta CURRENT_STAGE_SIDE
 
+        ; Reset CURRENT_STAGE_PTR to point to the first stage left data
+        lda #<stage_one_data
+        sta CURRENT_STAGE_PTR
+        lda #>stage_one_data
+        sta CURRENT_STAGE_PTR+1
+
+        jsr update_stage_data
+
+
     enable_rendering:
 
         ; Set PPUSCROLL to 0,0
@@ -306,10 +319,13 @@ forever:
     bne NotNMISynced
     NMISynced:
         jsr handle_input
-        jsr handle_nametable_change
         jsr update_player
         jsr update_sprites
     NotNMISynced:
+        jsr handle_nametable_change
+        jsr update_stage_data
+        jsr update_collision_ptr
+        jsr update_nametable
         jsr main_game_loop
         jsr handle_collision
         jmp forever
@@ -447,7 +463,7 @@ render_tile_subroutine:
     sta SPRITE_BUFFER, x
     inx
 
-    lda #$01
+    lda #%00100001
     sta SPRITE_BUFFER, x
     inx
 
@@ -1059,6 +1075,10 @@ write_nametable:
         lda #>megatiles_stage_two
         sta MEGATILES_PTR+1
         jmp decode_and_write_nametable
+    
+    vblankwaitNT:
+        bit PPUSTATUS
+        bpl vblankwaitNT
 
     decode_and_write_nametable:
     ldx #0
@@ -1119,6 +1139,9 @@ load_attributes:
     tya
     pha
 
+    vblankwaitAttributes:
+        bit PPUSTATUS
+        bpl vblankwaitAttributes
     ldx #0
     read_attribute_loop:
         txa
@@ -1147,24 +1170,13 @@ handle_nametable_change:
     tya
     pha
 
-    ; If A was not pressed, skip to end
-    lda pad
-    and #BTN_A
-    beq skip_nametable_change
+    ; If need_update_nametable is set, update nametable
+    lda need_update_nametable
+    cmp #1
+    beq start_update_nametable
+    jmp skip_nametable_change
 
-    ; Disable disable NMI and screen
-    lda PPUCTRL
-    and #%01111111
-    sta PPUCTRL
-    lda PPUMASK
-    and #%11100000
-    sta PPUMASK
-
-    vblankwait3:
-        bit PPUSTATUS
-        bpl vblankwait3
-
-
+    start_update_nametable:
     ; If in stage one, set to stage two
     ; If in stage two, set to stage one
     lda CURRENT_STAGE
@@ -1174,15 +1186,11 @@ handle_nametable_change:
     beq set_stage_one
 
     set_stage_two:
-        lda #1
-        sta need_update_nametable
         lda #2
         sta CURRENT_STAGE
         jmp call_update_nametable
     
     set_stage_one:
-        lda #1
-        sta need_update_nametable
         lda #1
         sta CURRENT_STAGE
         jmp call_update_nametable
@@ -1192,16 +1200,8 @@ handle_nametable_change:
         lda #$00
         sta SCROLL_POSITION_X
         sta SCROLL_POSITION_Y
-        jsr update_nametable
 
     skip_nametable_change:
-
-    ; Restore NMI and screen
-    lda #$80
-    sta PPUCTRL
-    lda #$1e
-    sta PPUMASK
-
     ; Pop registers from stack
     pla
     tay
@@ -1222,7 +1222,21 @@ update_nametable:
     ; Check if need_update_nametable is set
     lda need_update_nametable
     cmp #1
-    bne skip_update_nametable_intermediate
+    beq continue_update_nametable
+    jmp skip_update_nametable
+
+    continue_update_nametable:
+    ; Disable disable NMI and screen
+    lda PPUCTRL
+    and #%01111111
+    sta PPUCTRL
+    lda PPUMASK
+    and #%11100000
+    sta PPUMASK
+
+    vblankwait3:
+        bit PPUSTATUS
+        bpl vblankwait3
 
     ; Select nametable based on CURRENT_STAGE
     lda CURRENT_STAGE
@@ -1292,10 +1306,10 @@ update_nametable:
         sta NAMETABLE_PTR+1
         jsr load_attributes
 
-        jmp skip_update_nametable
+        ; Set need_update_nametable to 0
+        lda #0
+        sta need_update_nametable
 
-
-    skip_update_nametable_intermediate:
         jmp skip_update_nametable
     
     select_stage_two:
@@ -1357,12 +1371,19 @@ update_nametable:
         sta NAMETABLE_PTR+1
         jsr load_attributes
 
+        ; Set need_update_nametable to 0
+        lda #0
+        sta need_update_nametable
+
         jmp skip_update_nametable
 
     skip_update_nametable:
-    ; Set need_update_nametable to 0
-    lda #0
-    sta need_update_nametable
+
+    ; Restore NMI and screen
+    lda #$80
+    sta PPUCTRL
+    lda #$1e
+    sta PPUMASK
 
     ; Pop registers from stack
     pla
@@ -1621,10 +1642,19 @@ main_game_loop:
     jsr update_collision_ptr
     
     continue_game_loop:
-    ; If SCROLL_STAGE == 1 and SCROLL_POSITION_X == 255, stop scrolling
+    ; If SCROLL_STAGE == 1 and SCROLL_POSITION_X == 255 and CURRENT_STAGE_SIDE == 0
     lda SCROLL_STAGE
     cmp #1
     bne check_if_need_scroll
+
+    ; Turn off player sprite if SCROLL_STAGE == 1
+    waitForVBlank:
+        bit PPUSTATUS
+        bpl waitForVBlank
+    
+    lda PPUMASK
+    and #%11110111
+    sta PPUMASK
     lda SCROLL_POSITION_X
     cmp #255
     bne skip_side_change
@@ -1640,26 +1670,62 @@ main_game_loop:
         inx
         cpx #16
         bne move_p_16_right
+    
+    ; Set stage side to 1 (right)
+    lda #1
+    sta CURRENT_STAGE_SIDE
+
+    ; Update collision map pointer
+    jsr update_collision_ptr
+
+    ; Show player sprite
+    lda PPUMASK
+    ora #%00001000
+    sta PPUMASK
 
     jmp skip_side_change
 
     check_if_need_scroll:
-    ; If player reached end of stage one left, change current_side
+    ; If player reached end of current stage
     ; If playerx == 240 and playery == 64, change current_side to 1 (right)
+    lda CURRENT_STAGE_SIDE
+    cmp #0
+    beq check_left_if_need_scroll
+    jmp skip_side_change
+
+    check_left_if_need_scroll:
     lda PLAYER_X
-    cmp #240
+    cmp STAGE_ONE_LEFT_END
     bne skip_side_change
+    clc
     lda PLAYER_Y
-    cmp #64
+    cmp STAGE_ONE_LEFT_END+1
     bne skip_side_change
-    lda #1
-    sta CURRENT_STAGE_SIDE
 
     ; Start transition to scroll to the right
     lda #1
     sta SCROLL_STAGE
+    jmp skip_side_change
 
     skip_side_change:
+    ; If current stage side == 1 (right) and playerx == CURRENT_END_X and playery == CURRENT_END_Y
+    ; Change nametable and switch to left side
+    lda CURRENT_STAGE_SIDE
+    cmp #1
+    bne end_main_game_loop
+    lda PLAYER_X
+    cmp CURRENT_END_X
+    bne end_main_game_loop
+    clc
+    lda PLAYER_Y
+    cmp CURRENT_END_Y
+    bne end_main_game_loop
+
+    ; Since we are at the end of the stage, go to new stage
+    lda #1
+    sta need_update_nametable
+
+    end_main_game_loop:
     ; Pop registers from stack
     pla
     tay
@@ -1705,6 +1771,107 @@ update_collision_ptr:
 
     rts
 
+update_stage_data:
+    pha
+    txa
+    pha
+    tya
+    pha
+
+    ; Load stage data based on current stage
+    lda CURRENT_STAGE
+    cmp #1
+    beq load_stage_one_data
+    cmp #2
+    beq load_stage_two_data
+
+    load_stage_one_data:
+        lda CURRENT_STAGE_SIDE
+        cmp #0
+        beq load_stage_one_left_data
+        cmp #1
+        beq load_stage_one_right_data
+
+    load_stage_two_data:
+        lda CURRENT_STAGE_SIDE
+        cmp #0
+        beq load_stage_two_left_data
+        cmp #1
+        beq load_stage_two_right_data
+    
+    load_stage_one_left_data:
+        lda STAGE_ONE_LEFT_START
+        sta CURRENT_START_X
+        lda STAGE_ONE_LEFT_START+1
+        sta CURRENT_START_Y
+
+        lda STAGE_ONE_LEFT_END
+        sta CURRENT_END_X
+        lda STAGE_ONE_LEFT_END+1
+        sta CURRENT_END_Y
+        jmp end_update_stage_data
+    
+    load_stage_one_right_data:
+        lda STAGE_ONE_RIGHT_START
+        sta CURRENT_START_X
+        lda STAGE_ONE_RIGHT_START+1
+        sta CURRENT_START_Y
+
+        lda STAGE_ONE_RIGHT_END
+        sta CURRENT_END_X
+        lda STAGE_ONE_RIGHT_END+1
+        sta CURRENT_END_Y
+        jmp end_update_stage_data
+    
+    load_stage_two_left_data:
+        lda STAGE_TWO_LEFT_START
+        sta CURRENT_START_X
+        lda STAGE_TWO_LEFT_START+1
+        sta CURRENT_START_Y
+
+        lda STAGE_TWO_LEFT_END
+        sta CURRENT_END_X
+        lda STAGE_TWO_LEFT_END+1
+        sta CURRENT_END_Y
+        jmp end_update_stage_data
+
+    load_stage_two_right_data:
+        lda STAGE_TWO_RIGHT_START
+        sta CURRENT_START_X
+        lda STAGE_TWO_RIGHT_START+1
+        sta CURRENT_START_Y
+
+        lda STAGE_TWO_RIGHT_END
+        sta CURRENT_END_X
+        lda STAGE_TWO_RIGHT_END+1
+        sta CURRENT_END_Y
+    
+    end_update_stage_data:
+    pla
+    tya
+    pla
+    tax
+    pla
+
+    rts
+
+started_on_new_section:
+
+    ; Save registers to stack
+    pha
+    txa
+    pha
+    tya
+    pha
+
+
+    pla
+    tay
+    pla
+    tax
+    pla
+
+    rts
 
 ; BYTEARRAYS
 stage_one_palettes:
@@ -1734,6 +1901,16 @@ ant_static_down:
 ant_static_left:
 .byte $61, $62, $72, $71
 
+; Stage data
+STAGE_ONE_LEFT_START: .byte $00, $90
+STAGE_ONE_LEFT_END: .byte $F0, $40
+STAGE_ONE_RIGHT_START: .byte $00, $40
+STAGE_ONE_RIGHT_END: .byte $F1, $90
+STAGE_TWO_LEFT_START: .byte $00, $00
+STAGE_TWO_LEFT_END: .byte $00, $00
+STAGE_TWO_RIGHT_START: .byte $00, $00
+STAGE_TWO_RIGHT_END: .byte $00, $00
+
 ; Stage one nametables and attributes
 stage_one_left_packaged:
 .incbin "assets/nametables/stage_one/stage_one_left_packaged.bin"
@@ -1743,24 +1920,26 @@ stage_one_right_packaged:
 .incbin "assets/nametables/stage_one/stage_one_right_packaged.bin"
 stage_one_right_attributes:
 .incbin "assets/nametables/stage_one/stage_one_right_attributes.bin"
-stage_one_left_data:
+stage_one_data:
 .incbin "assets/nametables/stage_one/stage_one_left_data.bin"
-stage_one_right_data:
 .incbin "assets/nametables/stage_one/stage_one_right_data.bin"
 
 ; Stage two nametables and attributes
 stage_two_left_packaged:
-.incbin "assets/nametables/stage_two_left_packaged.bin"
+.incbin "assets/nametables/stage_two/stage_two_left_packaged.bin"
 stage_two_left_attributes:
-.incbin "assets/nametables/stage_two_left_attributes.bin"
+.incbin "assets/nametables/stage_two/stage_two_left_attributes.bin"
 stage_two_right_packaged:
-.incbin "assets/nametables/stage_two_right_packaged.bin"
+.incbin "assets/nametables/stage_two/stage_two_right_packaged.bin"
 stage_two_right_attributes:
-.incbin "assets/nametables/stage_two_right_attributes.bin"
+.incbin "assets/nametables/stage_two/stage_two_right_attributes.bin"
+stage_two_data:
+.incbin "assets/nametables/stage_two/stage_two_right_data.bin"
+.incbin "assets/nametables/stage_two/stage_two_left_data.bin"
 
 ; Megatiles
 megatiles_stage_one:
-.byte $07, $29, $09, $27 ; Only $09 and $27 are collidable
+.byte $07, $09, $27, $29 ; Only $09 and $27 are collidable
 megatiles_stage_two:
 .byte $0b, $0d, $2b, $2d ; Only $0d and $2b are collidable
 
